@@ -36,27 +36,23 @@ public static class NativeMethods
     [DllImport("Shell32.dll", CharSet = CharSet.Unicode)]
     public static extern uint SHEmptyRecycleBin(IntPtr hWnd, uint dwFlags);
 
-    [DllImport("rstrtmgr.dll", CharSet = CharSet.Unicode)]
-    public static extern uint RmStartSession(out IntPtr pSessionHandle, uint dwSessionFlags, string strSessionKey);
+    [DllImport("user32.dll")]
+    internal static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
 
-    [DllImport("rstrtmgr.dll")]
-    public static extern uint RmEndSession(IntPtr pSessionHandle);
+    [DllImport("user32.dll", SetLastError = true)]
+    internal static extern uint GetWindowThreadProcessId(nint hWnd, out uint lpdwProcessId);
 
-    [DllImport("rstrtmgr.dll", CharSet = CharSet.Auto)]
-    public static extern uint RmRegisterResources(
-        IntPtr pSessionHandle,
-        uint nFiles,
-        string[]? rgsFilenames,
-        uint applications,
-        RM_UNIQUE_PROCESS[]? rgApplications,
-        uint nServices,
-        string[]? rgsServiceNames);
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    internal static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, UIntPtr wParam, IntPtr lParam);
 
-    [DllImport("rstrtmgr.dll")]
-    public static extern uint RmShutdown(IntPtr pSessionHandle, RM_SHUTDOWN_TYPE lActionFlags, [Optional] RM_WRITE_STATUS_CALLBACK? fnStatus);
+    [DllImport("user32.dll")]
+    internal static extern bool IsWindowVisible(IntPtr hWnd);
+}
 
-    [DllImport("rstrtmgr.dll")]
-    public static extern uint RmRestart(IntPtr pSessionHandle, uint dwRestartFlags, [Optional] RM_WRITE_STATUS_CALLBACK? fnStatus);
+public enum WindowsMessages : uint
+{
+    WM_QUERYENDSESSION = 0x0011,
+    WM_ENDSESSION = 0x0016,
 }
 
 public enum SystemErrorCode : uint
@@ -149,26 +145,3 @@ public enum FirmwareType
 }
 
 public delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr lParam);
-
-[StructLayout(LayoutKind.Sequential)]
-public struct FILETIME
-{
-    public uint DateTimeLow;
-    public uint DateTimeHigh;
-}
-
-[StructLayout(LayoutKind.Sequential)]
-public struct RM_UNIQUE_PROCESS
-{
-    public int ProcessId;
-    public FILETIME ProcessStartTime;
-}
-
-[Flags]
-public enum RM_SHUTDOWN_TYPE : uint
-{
-    RmForceShutdown = 0x1,
-    RmShutdownOnlyRegistered = 0x10,
-}
-
-public delegate void RM_WRITE_STATUS_CALLBACK(uint nPercentComplete);

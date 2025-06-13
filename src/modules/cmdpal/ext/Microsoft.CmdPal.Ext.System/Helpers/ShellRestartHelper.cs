@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -17,13 +18,15 @@ namespace Microsoft.CmdPal.Ext.System.Helpers;
 /// </summary>
 internal static class ShellRestartHelper
 {
-    private static readonly TimeSpan DefaultShutdownTimeout = TimeSpan.FromSeconds(10);
-    private static readonly TimeSpan PostRestartCheckDelay = TimeSpan.FromSeconds(10);
+    private const string ShellProcessExecutableName = "explorer.exe";
+
+    private static readonly TimeSpan ShutdownTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan PostRestartCheckDelay = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Restarts all instances of the "explorer.exe" process in the current session.
     /// </summary>
-    internal static async Task RestartAllInCurrentSession()
+    internal static async Task RestartAllInCurrentSession(bool tryToSaveStateBeforeExit)
     {
         // Restarting Windows Explorer:
         // - Explorer can have multiple processes running in the same session. Let's not speculate why the user
@@ -33,167 +36,75 @@ internal static class ShellRestartHelper
         // - Restart Manager will restore opened folder windows after restart (only if enabled in Folder Options).
         // - Restarting by will make the new explorer.exe process a child process of CmdPal. This is not much of a
         //   problem unless something kills the entire CmdPal process tree.
-        await RestartProcessesInCurrentSessionAsync("explorer.exe");
-
         // - Windows can automatically restart the shell if it detects that it has crashed. This can be disabled
         //   in registry (key AutoRestartShell).
-        // - Restart Manager is not guaranteed to restart all the processes it closes.
-        await EnsureProcessIsRunning("explorer.exe");
+        var processes = GetProcessesInCurrentSessionByName(ShellProcessExecutableName);
+        if (processes.Length > 0)
+        {
+            if (tryToSaveStateBeforeExit)
+            {
+                // This is the same trick Restart Manager uses to shutdown applications gracefully before restart.
+                SendEndSessionToProcessWindows(processes);
+            }
+
+            await WaitForEndWithTimeoutAsync(processes, tryToSaveStateBeforeExit ? ShutdownTimeout : TimeSpan.Zero);
+        }
+
+        await EnsureProcessIsRunning(ShellProcessExecutableName, waitForAutoRestart: !tryToSaveStateBeforeExit);
     }
 
-    /// <summary>
-    /// Restarts all instances of the specified process name.
-    /// </summary>
-    /// <param name="processExecutableName">The name of the process to restart.</param>
-    /// <returns>A task that represents the asynchronous operation.</returns>
-    /// <exception cref="ArgumentNullException">Thrown when processName is null.</exception>
-    /// <exception cref="ArgumentException">Thrown when processName is null or consists only of white-space characters.</exception>
-    private static async Task RestartProcessesInCurrentSessionAsync(string processExecutableName)
+    private static Process[] GetProcessesInCurrentSessionByName(string processExecutableName)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(processExecutableName);
+        var processName = Path.GetFileNameWithoutExtension(processExecutableName);
+        return [.. Process.GetProcessesByName(processName).Where(Filter)];
 
-        var restartManagerSessionHandle = nint.Zero;
-
-        try
-        {
-            var processName = Path.GetFileNameWithoutExtension(processExecutableName);
-            var uniqueProcesses = GetProcesses(processName);
-            if (uniqueProcesses.Length == 0)
-            {
-                return;
-            }
-
-            var result = NativeMethods.RmStartSession(out restartManagerSessionHandle, 0, $"PT_{Guid.NewGuid()}");
-            ThrowIfError(result, "start Restart Manager session");
-
-            result = NativeMethods.RmRegisterResources(restartManagerSessionHandle, 0, null, (uint)uniqueProcesses.Length, uniqueProcesses, 0, null);
-            ThrowIfError(result, "register resources with Restart Manager");
-
-            await ShutdownOrKillAsync(restartManagerSessionHandle, uniqueProcesses, DefaultShutdownTimeout);
-
-            result = NativeMethods.RmRestart(restartManagerSessionHandle, 0);
-            ThrowIfError(result, "restart processes");
-        }
-        catch (Exception ex) when (ex is not ArgumentNullException)
-        {
-            ExtensionHost.LogMessage($"Critical failure: {ex.Message}");
-        }
-        finally
-        {
-            if (restartManagerSessionHandle != 0)
-            {
-                try
-                {
-                    _ = NativeMethods.RmEndSession(restartManagerSessionHandle);
-                }
-                catch
-                {
-                    // Suppress cleanup exceptions
-                }
-            }
-        }
-    }
-
-    private static async Task ShutdownOrKillAsync(
-        nint sessionHandle,
-        RM_UNIQUE_PROCESS[] processes,
-        TimeSpan timeout)
-    {
-        // RmShutdown is a blocking call that can take a long time to return. We can run it in a separate thread
-        // and kill the processes when we run out of patience.
-        // https://learn.microsoft.com/en-us/windows/win32/api/restartmanager/nf-restartmanager-rmshutdown
-        var shutdownTask = Task.Run(() => NativeMethods.RmShutdown(sessionHandle, RM_SHUTDOWN_TYPE.RmForceShutdown));
-
-        try
-        {
-            var result = await shutdownTask.WaitAsync(timeout);
-            if (result != 0)
-            {
-                ExtensionHost.LogMessage($"RmShutdown returned error {result}, performing force kill.");
-                KillProcesses(processes);
-            }
-        }
-        catch (TimeoutException)
-        {
-            KillProcesses(processes);
-            try
-            {
-                await shutdownTask;
-            }
-            catch
-            {
-                // ignore
-            }
-        }
-    }
-
-    private static RM_UNIQUE_PROCESS[] GetProcesses(string processName)
-    {
-        var currentSessionId = Process.GetCurrentProcess().SessionId;
-
-        return Process.GetProcessesByName(processName)
-            .Select(process => GetProcessInfoSafe(process, currentSessionId))
-            .OfType<RM_UNIQUE_PROCESS>()
-            .ToArray();
-
-        static RM_UNIQUE_PROCESS? GetProcessInfoSafe(Process process, int targetSessionId)
+        static bool Filter(Process process)
         {
             try
             {
-                if (process.HasExited || process.SessionId != targetSessionId)
-                {
-                    return null;
-                }
-
-                return new RM_UNIQUE_PROCESS
-                {
-                    ProcessId = process.Id,
-                    ProcessStartTime = ToFileTimeStruct(process.StartTime),
-                };
+                return !process.HasExited && process.SessionId == Process.GetCurrentProcess().SessionId;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
-                ExtensionHost.LogMessage($"Error retrieving processes (Process ID {process.Id}): {ex.Message}");
-                return null;
+                return false;
             }
-        }
-
-        static FILETIME ToFileTimeStruct(DateTime dateTime)
-        {
-            var fileTime = dateTime.ToFileTimeUtc();
-            return new FILETIME
-            {
-                DateTimeLow = (uint)fileTime,
-                DateTimeHigh = (uint)(fileTime >> 32),
-            };
         }
     }
 
-    private static void KillProcesses(RM_UNIQUE_PROCESS[] processes)
+    private static void SendEndSessionToProcessWindows(IEnumerable<Process> processes)
     {
         foreach (var process in processes)
         {
-            try
+            var handles = GetWindowHandlesForProcess(process.Id);
+            foreach (var hWnd in handles)
             {
-                Process.GetProcessById(process.ProcessId).Kill();
-            }
-            catch (ArgumentException)
-            {
-                // Process might have exited already
-            }
-            catch (Exception ex)
-            {
-                ExtensionHost.LogMessage($"Failed to kill process ID {process.ProcessId}: {ex.Message}");
+                // WM_QUERYENDSESSION causes the process to prepare for shutdown (register for restart)
+                NativeMethods.SendMessage(hWnd, (uint)WindowsMessages.WM_QUERYENDSESSION, 0, 0x01);
+
+                // WM_ENDSESSION should save the state and close the window
+                NativeMethods.SendMessage(hWnd, (uint)WindowsMessages.WM_ENDSESSION, 1, 0x01);
             }
         }
     }
 
-    private static void ThrowIfError(uint result, string operation)
+    private static List<IntPtr> GetWindowHandlesForProcess(int processId)
     {
-        if ((SystemErrorCode)result != SystemErrorCode.ERROR_SUCCESS)
-        {
-            throw new InvalidOperationException($"Failed to {operation}. Error code: {result}");
-        }
+        var result = new List<IntPtr>();
+
+        NativeMethods.EnumWindows(
+            (hWnd, lParam) =>
+            {
+                _ = NativeMethods.GetWindowThreadProcessId(hWnd, out var windowPid);
+                if (windowPid == processId && NativeMethods.IsWindowVisible(hWnd))
+                {
+                    result.Add(hWnd);
+                }
+
+                return true; // continue enumeration
+            },
+            nint.Zero);
+
+        return result;
     }
 
     /// <summary>
@@ -201,22 +112,25 @@ internal static class ShellRestartHelper
     /// </summary>
     /// <param name="processExecutableName">The name of the process to restart.</param>
     /// <returns>A task that represents the asynchronous operation.</returns>
-    private static async Task EnsureProcessIsRunning(string processExecutableName)
+    private static async Task EnsureProcessIsRunning(string processExecutableName, bool waitForAutoRestart)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(processExecutableName);
 
         var processName = Path.GetFileNameWithoutExtension(processExecutableName);
 
-        if (GetProcesses(processName).Length > 0)
+        if (GetProcessesInCurrentSessionByName(processName).Length > 0)
         {
             return;
         }
 
-        await Task.Delay(PostRestartCheckDelay);
-
-        if (GetProcesses(processName).Length > 0)
+        if (waitForAutoRestart)
         {
-            return;
+            await Task.Delay(PostRestartCheckDelay);
+
+            if (GetProcessesInCurrentSessionByName(processName).Length > 0)
+            {
+                return;
+            }
         }
 
         try
@@ -227,5 +141,39 @@ internal static class ShellRestartHelper
         {
             ExtensionHost.LogMessage($"Fail-safe failed to start {processExecutableName}: {ex.Message}");
         }
+    }
+
+    private static async Task WaitForEndWithTimeoutAsync(IEnumerable<Process> processes, TimeSpan timeout)
+    {
+        var activeProcesses = processes.Where(static p => p is { HasExited: false }).ToList();
+        if (activeProcesses.Count == 0)
+        {
+            return;
+        }
+
+        var waitTasks = activeProcesses.Select(static p => p.WaitForExitAsync());
+        await Task.WhenAny(Task.WhenAll(waitTasks), Task.Delay(timeout));
+
+        // Kill any remaining processes
+        var killTasks = activeProcesses
+            .Where(static p => !p.HasExited)
+            .Select(static async p =>
+            {
+                try
+                {
+                    p.Kill(entireProcessTree: false);
+                    await p.WaitForExitAsync();
+                }
+                catch (ArgumentException)
+                {
+                    // Process might have exited already
+                }
+                catch (Exception ex)
+                {
+                    ExtensionHost.LogMessage($"Failed to kill process ID {p.Id}: {ex.Message}");
+                }
+            });
+
+        await Task.WhenAll(killTasks);
     }
 }

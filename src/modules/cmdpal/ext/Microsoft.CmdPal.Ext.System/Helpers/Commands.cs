@@ -111,7 +111,7 @@ internal static class Commands
                 });
         }
 
-        results.Add(new ListItem(new ExecuteCommandConfirmation(Resources.Microsoft_plugin_sys_RestartShell_name!, confirmCommands, Resources.Microsoft_plugin_sys_RestartShell_confirmation!, static () => Task.Run(static () => ShellRestartHelper.RestartAllInCurrentSession())))
+        results.Add(new ListItem(new ExecuteCommandConfirmation(Resources.Microsoft_plugin_sys_RestartShell_name!, confirmCommands, Resources.Microsoft_plugin_sys_RestartShell_confirmation!, static () => Task.Run(static () => ShellRestartHelper.RestartAllInCurrentSession(true))))
         {
             Title = Resources.Microsoft_plugin_sys_RestartShell!,
             Subtitle = Resources.Microsoft_plugin_sys_RestartShell_description!,
