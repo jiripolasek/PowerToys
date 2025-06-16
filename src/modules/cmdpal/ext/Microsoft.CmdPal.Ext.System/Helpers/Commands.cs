@@ -110,7 +110,7 @@ internal static class Commands
                 });
         }
 
-        results.Add(new ListItem(new ExecuteCommandConfirmation(Resources.Microsoft_plugin_sys_RestartShell_name!, confirmCommands, Resources.Microsoft_plugin_sys_RestartShell_confirmation!, static () => OpenInShellHelper.OpenInShell("cmd", "/C tskill explorer && explorer", runWithHiddenWindow: true)))
+        results.Add(new ListItem(new ExecuteCommandConfirmation(Resources.Microsoft_plugin_sys_RestartShell_name!, confirmCommands, Resources.Microsoft_plugin_sys_RestartShell_confirmation!, static () => OpenInShellHelper.OpenInShell("cmd", "/C tskill explorer && start explorer", runWithHiddenWindow: true)))
         {
             Title = Resources.Microsoft_plugin_sys_RestartShell!,
             Subtitle = Resources.Microsoft_plugin_sys_RestartShell_description!,
