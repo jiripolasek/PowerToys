@@ -33,6 +33,7 @@ public partial class ListViewModel : PageViewModel, IDisposable
     private readonly Lock _listLock = new();
 
     private InterlockedBoolean _isLoading;
+    private InterlockedBoolean _isLoadMoreRequested;
     private bool _isFetching;
 
     public event TypedEventHandler<ListViewModel, object>? ItemsUpdated;
@@ -465,38 +466,52 @@ public partial class ListViewModel : PageViewModel, IDisposable
             return;
         }
 
-        if (!_isLoading.Set())
-        {
-            return;
+        _isLoadMoreRequested.Set();
 
-            // NOTE: May miss newly available items until next scroll if model
-            // state changes between our check and this reset
+        if (_isLoading.Set())
+        {
+            _ = Task.Run(() => ProcessLoadMoreRequests(model));
         }
 
-        _ = Task.Run(() =>
+        return;
+
+        void ProcessLoadMoreRequests(IListPage listPage)
         {
-            // Execute all COM calls on background thread to avoid reentrancy issues with UI
-            // with the UI thread when COM starts inner message pump
+            // COM calls must be on background thread to avoid reentrancy issues
+            // with the UI if COM interaction starts inner message pump
+            var loadingStarted = false;
+
             try
             {
-                if (model.HasMoreItems)
+                do
                 {
-                    model.LoadMore();
+                    _isLoadMoreRequested.Clear();
+                    if (!listPage.HasMoreItems)
+                    {
+                        continue;
+                    }
+
+                    listPage.LoadMore();
+                    loadingStarted = false;
+                    break;
 
                     // _isLoading flag will be set as a result of LoadMore,
                     // which must raise ItemsChanged to end the loading.
                 }
-                else
+                while (_isLoadMoreRequested.Value);
+            }
+            catch (Exception ex)
+            {
+                ShowException(ex, listPage.Name);
+            }
+            finally
+            {
+                if (!loadingStarted)
                 {
                     _isLoading.Clear();
                 }
             }
-            catch (Exception ex)
-            {
-                _isLoading.Clear();
-                ShowException(ex, model.Name);
-            }
-        });
+        }
     }
 
     protected override void FetchProperty(string propertyName)
