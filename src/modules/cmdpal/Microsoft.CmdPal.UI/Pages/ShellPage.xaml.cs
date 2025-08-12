@@ -17,9 +17,11 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.PowerToys.Telemetry;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Input;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media.Animation;
+using Windows.UI.Core;
 using DispatcherQueue = Microsoft.UI.Dispatching.DispatcherQueue;
 using VirtualKey = Windows.System.VirtualKey;
 
@@ -84,6 +86,7 @@ public sealed partial class ShellPage : Microsoft.UI.Xaml.Controls.Page,
         WeakReferenceMessenger.Default.Register<NavigateToPageMessage>(this);
 
         AddHandler(PreviewKeyDownEvent, new KeyEventHandler(ShellPage_OnPreviewKeyDown), true);
+        AddHandler(KeyDownEvent, new KeyEventHandler(ShellPage_OnKeyDown), false);
         AddHandler(PointerPressedEvent, new PointerEventHandler(ShellPage_OnPointerPressed), true);
 
         RootFrame.Navigate(typeof(LoadingPage), ViewModel);
@@ -134,8 +137,17 @@ public sealed partial class ShellPage : Microsoft.UI.Xaml.Controls.Page,
 
             PowerToysTelemetry.Log.WriteEvent(new OpenPage(RootFrame.BackStackDepth));
 
-            // Refocus on the Search for continual typing on the next search request
-            SearchBox.Focus(Microsoft.UI.Xaml.FocusState.Programmatic);
+            switch (message.Page)
+            {
+                case ContentPageViewModel:
+                    // If we're navigating to a content page, we want to focus the root frame
+                    RootFrame.Focus(FocusState.Programmatic);
+                    break;
+                default:
+                    // Refocus on the Search for continual typing on the next search request
+                    SearchBox.Focus(FocusState.Programmatic);
+                    break;
+            }
 
             if (!ViewModel.IsNested)
             {
@@ -427,6 +439,17 @@ public sealed partial class ShellPage : Microsoft.UI.Xaml.Controls.Page,
             // We just need to reconcile our loading systems a bit more in the future.
             ViewModel.CurrentPage = page;
         }
+
+        if (e.Content is ContentPage element)
+        {
+            // TODO: not good, not good at all,// but we need to ensure that the page is focused
+            this.UpdateLayout();
+            DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
+            {
+                // Ensure that the current page is focused when navigating to it
+                element.Focus(FocusState.Keyboard);
+            });
+        }
     }
 
     /// <summary>
@@ -452,11 +475,54 @@ public sealed partial class ShellPage : Microsoft.UI.Xaml.Controls.Page,
         }
     }
 
-    private void ShellPage_OnPreviewKeyDown(object sender, KeyRoutedEventArgs e)
+    private static void ShellPage_OnPreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
         if (e.Key == VirtualKey.Left && e.KeyStatus.IsMenuKeyDown)
         {
             WeakReferenceMessenger.Default.Send<NavigateBackMessage>(new());
+            e.Handled = true;
+        }
+        else
+        {
+            var ctrlPressed = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control).HasFlag(CoreVirtualKeyStates.Down);
+            var altPressed = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Menu).HasFlag(CoreVirtualKeyStates.Down);
+            var shiftPressed = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift).HasFlag(CoreVirtualKeyStates.Down);
+            var winPressed = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.LeftWindows).HasFlag(CoreVirtualKeyStates.Down) ||
+                             InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.RightWindows).HasFlag(CoreVirtualKeyStates.Down);
+
+            // The CommandBar is responsible for handling all the item keybindings,
+            // since the bound context item may need to then show another
+            // context menu
+            TryCommandKeybindingMessage msg = new(ctrlPressed, altPressed, shiftPressed, winPressed, e.Key);
+            WeakReferenceMessenger.Default.Send(msg);
+            e.Handled = msg.Handled;
+        }
+    }
+
+    private static void ShellPage_OnKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        var ctrlPressed = InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control).HasFlag(CoreVirtualKeyStates.Down);
+        if (ctrlPressed && e.Key == VirtualKey.Enter)
+        {
+            // ctrl+enter
+            WeakReferenceMessenger.Default.Send<ActivateSecondaryCommandMessage>();
+            e.Handled = true;
+        }
+        else if (e.Key == VirtualKey.Enter)
+        {
+            WeakReferenceMessenger.Default.Send<ActivateSelectedListItemMessage>();
+            e.Handled = true;
+        }
+        else if (ctrlPressed && e.Key == VirtualKey.K)
+        {
+            // ctrl+k
+            WeakReferenceMessenger.Default.Send<OpenContextMenuMessage>(new OpenContextMenuMessage(null, null, null, ContextMenuFilterLocation.Bottom));
+            e.Handled = true;
+        }
+        else if (e.Key == VirtualKey.Escape)
+        {
+            WeakReferenceMessenger.Default.Send<NavigateBackMessage>(new());
+            e.Handled = true;
         }
     }
 
