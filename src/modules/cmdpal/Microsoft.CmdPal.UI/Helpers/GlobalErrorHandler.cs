@@ -3,9 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 using System.Runtime.InteropServices;
-
 using ManagedCommon;
-
 using Microsoft.Windows.AppNotifications;
 using Microsoft.Windows.AppNotifications.Builder;
 
@@ -82,7 +80,7 @@ internal sealed class GlobalErrorHandler : IDisposable
             DisableCloseButton = !recoverable,
             ErrorReport = errorReport ?? exception.ToString(),
             ReportFilePath = errorReportFile,
-            Mode = recoverable ? ErrorReportWindow.TroubleMode.Fatal : ErrorReportWindow.TroubleMode.Recoverable,
+            Mode = recoverable ? ErrorReportWindow.TroubleMode.Recoverable : ErrorReportWindow.TroubleMode.Fatal,
         });
     }
 
