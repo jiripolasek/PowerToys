@@ -4,7 +4,6 @@
 
 using System.Globalization;
 using System.Security.Principal;
-
 using Windows.ApplicationModel;
 
 namespace Microsoft.CmdPal.UI.Helpers;
@@ -26,6 +25,7 @@ internal sealed class ErrorReportBuilder
         var sanitizedMessage = scrub ? _sanitizer.Sanitize(exception.Message) : exception.Message;
         var sanitizedToString = scrub ? _sanitizer.Sanitize(exception.ToString()) : exception.ToString();
 
+        // Note: do not localize technical part of the report, we need to ensure it can be read by developers
         var message =
                $"""
                 ============================================================
@@ -64,6 +64,7 @@ internal sealed class ErrorReportBuilder
 
     private static string GetElevationStatus()
     {
+        // Note: do not localize technical part of the report, we need to ensure it can be read by developers
         try
         {
             var isElevated = new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator);
@@ -77,6 +78,7 @@ internal sealed class ErrorReportBuilder
 
     private static string GetAppVersionSafe()
     {
+        // Note: do not localize technical part of the report, we need to ensure it can be read by developers
         try
         {
             var version = Package.Current.Id.Version;
