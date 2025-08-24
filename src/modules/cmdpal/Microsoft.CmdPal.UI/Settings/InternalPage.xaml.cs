@@ -43,17 +43,22 @@ public sealed partial class InternalPage : Page
         Logger.LogDebug("Starting a task that will throw test exception");
         Task.Run(() =>
         {
-            Logger.LogDebug("Throwing test exception from the a task thread");
+            Logger.LogDebug("Throwing test exception from a task");
             throw new InvalidOperationException("Test exception; throw from a task");
         });
     }
 
+    private void ThrowPlainMainThreadExceptionPii_Click(object sender, RoutedEventArgs e)
+    {
+        Logger.LogDebug("Throwing test exception from the UI thread (PII)");
+        throw new InvalidOperationException(SampleData.ExceptionMessageWithPii);
+    }
+
     private void OpenLogsCardClicked(object sender, RoutedEventArgs e)
     {
-        // TODO: remove before merge
         try
         {
-            var logPath = Path.Combine(Constants.AppDataPath(), "CmdPal", "Logs");
+            var logPath = Logger.CurrentVersionLogDirectoryPath;
             if (Directory.Exists(logPath))
             {
                 Process.Start(new ProcessStartInfo
@@ -64,16 +69,9 @@ public sealed partial class InternalPage : Page
                 });
             }
         }
-        catch (Exception exception)
+        catch (Exception ex)
         {
-            Console.WriteLine(exception);
-            throw;
+            Logger.LogError("Failed to open directory in Explorer", ex);
         }
-    }
-
-    private void ThrowPlainMainThreadExceptionPiis_Click(object sender, RoutedEventArgs e)
-    {
-        Logger.LogDebug("Throwing test exception from the UI thread (PIIs)");
-        throw new InvalidOperationException(SampleData.ExceptionMessageWithPiis);
     }
 }
