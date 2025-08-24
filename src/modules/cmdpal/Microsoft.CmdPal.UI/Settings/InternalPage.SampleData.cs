@@ -8,9 +8,9 @@ public partial class InternalPage
 {
     internal static class SampleData
     {
-        internal static string ExceptionMessageWithPiis { get; } =
+        internal static string ExceptionMessageWithPii { get; } =
             $"""
-             Test exception; thrown from the UI thread (PIIs)
+             Test exception with personal information; thrown from the UI thread
 
              Here is e-mail address <jane.doe@contoso.com>
              IPv4 address: 192.168.100.1
