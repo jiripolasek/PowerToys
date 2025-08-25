@@ -9,6 +9,7 @@ using ManagedCommon;
 using Microsoft.CmdPal.Core.ViewModels;
 using Microsoft.CmdPal.Core.ViewModels.Messages;
 using Microsoft.CmdPal.UI.Events;
+using Microsoft.CmdPal.UI.Helpers;
 using Microsoft.CmdPal.UI.Messages;
 using Microsoft.CmdPal.UI.Settings;
 using Microsoft.CmdPal.UI.ViewModels;
@@ -18,6 +19,7 @@ using Microsoft.PowerToys.Telemetry;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media.Animation;
@@ -57,6 +59,8 @@ public sealed partial class ShellPage : Microsoft.UI.Xaml.Controls.Page,
 
     private readonly ToastWindow _toast = new();
 
+    private readonly AutomationPeer _rootFramePeer;
+
     private SettingsWindow? _settingsWindow;
 
     public ShellViewModel ViewModel { get; private set; } = App.Current.Services.GetService<ShellViewModel>()!;
@@ -89,6 +93,7 @@ public sealed partial class ShellPage : Microsoft.UI.Xaml.Controls.Page,
         AddHandler(KeyDownEvent, new KeyEventHandler(ShellPage_OnKeyDown), false);
         AddHandler(PointerPressedEvent, new PointerEventHandler(ShellPage_OnPointerPressed), true);
 
+        _rootFramePeer = FrameworkElementAutomationPeer.FromElement(RootFrame) ?? new FrameworkElementAutomationPeer(RootFrame);
         RootFrame.Navigate(typeof(LoadingPage), ViewModel);
     }
 
@@ -136,18 +141,6 @@ public sealed partial class ShellPage : Microsoft.UI.Xaml.Controls.Page,
                 message.WithAnimation ? _slideRightTransition : _noAnimation);
 
             PowerToysTelemetry.Log.WriteEvent(new OpenPage(RootFrame.BackStackDepth));
-
-            switch (message.Page)
-            {
-                case ContentPageViewModel:
-                    // If we're navigating to a content page, we want to focus the root frame
-                    RootFrame.Focus(FocusState.Programmatic);
-                    break;
-                default:
-                    // Refocus on the Search for continual typing on the next search request
-                    SearchBox.Focus(FocusState.Programmatic);
-                    break;
-            }
 
             if (!ViewModel.IsNested)
             {
@@ -440,16 +433,73 @@ public sealed partial class ShellPage : Microsoft.UI.Xaml.Controls.Page,
             ViewModel.CurrentPage = page;
         }
 
-        if (e.Content is ContentPage element)
+        if (e.Content is Page element)
         {
-            // TODO: not good, not good at all,// but we need to ensure that the page is focused
-            this.UpdateLayout();
-            DispatcherQueue.TryEnqueue(DispatcherQueuePriority.Low, () =>
+            element.Loaded += FocusAfterLoaded;
+        }
+    }
+
+    private void FocusAfterLoaded(object sender, RoutedEventArgs e)
+    {
+        var page = (Page)sender;
+        page.Loaded -= FocusAfterLoaded;
+
+        AnnounceNavigationToPage(page);
+
+        var shouldSearchBoxBeVisible = ViewModel.CurrentPage?.HasSearchBox ?? false;
+
+        if (shouldSearchBoxBeVisible || page is not ContentPage)
+        {
+            ViewModel.IsSearchBoxVisible = shouldSearchBoxBeVisible;
+            SearchBox.Focus(Microsoft.UI.Xaml.FocusState.Programmatic);
+            SearchBox.SelectSearch();
+        }
+        else
+        {
+            _ = Task.Run(async () =>
             {
-                // Ensure that the current page is focused when navigating to it
-                element.Focus(FocusState.Keyboard);
+                await page.DispatcherQueue.EnqueueAsync(async () =>
+                {
+                    for (var i = 0; i < 10; i++)
+                    {
+                        if (FocusManager.FindFirstFocusableElement(page) is FrameworkElement frameworkElement)
+                        {
+                            Logger.LogInfo("Focusing " + frameworkElement + ", attempt " + i);
+                            var set = frameworkElement.Focus(FocusState.Programmatic);
+                            Logger.LogInfo("Focused? " + set);
+                            break;
+                        }
+
+                        await Task.Delay(100);
+                    }
+
+                    // Update the search box visibility based on the current page
+                    // We do this here after navigation so the focus is not jumping around too much
+                    // It messes with screen readers if we do it too early
+                    ViewModel.IsSearchBoxVisible = ViewModel.CurrentPage?.HasSearchBox ?? false;
+                });
             });
         }
+    }
+
+    private void AnnounceNavigationToPage(Page page)
+    {
+        var pageTitle = page switch
+        {
+            ListPage listPage => listPage.ViewModel?.Title,
+            ContentPage contentPage => contentPage.ViewModel?.Title,
+            _ => null,
+        };
+
+        if (string.IsNullOrEmpty(pageTitle))
+        {
+            pageTitle = ResourceLoaderInstance.GetString("UntitledPageTitle");
+        }
+
+        var announcement = $"Navigated to {pageTitle} page";
+
+        // Logger.LogDebug("Attempting to announce " + announcement);
+        _rootFramePeer.AnnounceActionForAccessibility(announcement, "CommandPalettePageNavigatedTo");
     }
 
     /// <summary>

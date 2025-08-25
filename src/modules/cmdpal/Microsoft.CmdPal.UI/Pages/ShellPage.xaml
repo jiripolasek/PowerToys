@@ -15,7 +15,7 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:toolkit="using:CommunityToolkit.WinUI.Controls"
     xmlns:ui="using:CommunityToolkit.WinUI"
-    xmlns:viewModels="using:Microsoft.CmdPal.UI.ViewModels"
+    xmlns:h="using:Microsoft.CmdPal.UI.Helpers"
     Background="Transparent"
     mc:Ignorable="d">
 
@@ -25,12 +25,6 @@
                 x:Key="StringNotEmptyToVisibilityConverter"
                 EmptyValue="Collapsed"
                 NotEmptyValue="Visible" />
-
-            <converters:BoolNegationConverter x:Key="BoolNegationConverter" />
-
-            <converters:BoolToObjectConverter x:Key="BoolToBorderBrush" FalseValue="Transparent" TrueValue="{ThemeResource DividerStrokeColorDefaultBrush}" />
-
-            <converters:BoolToObjectConverter x:Key="BoolToOpacityConverter" FalseValue="0" TrueValue="1" />
 
             <cmdpalUI:MessageStateToSeverityConverter x:Key="MessageStateToSeverityConverter" />
 
@@ -174,10 +168,11 @@
 
             <!--  Back button and search box  -->
             <Grid
+                x:Name="TopBarGrid"
                 Padding="0,12,0,12"
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Stretch"
-                BorderBrush="{x:Bind ViewModel.CurrentPage.HasSearchBox, Mode=OneWay, Converter={StaticResource BoolToBorderBrush}}"
+                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
                 BorderThickness="0,0,0,1">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
@@ -317,13 +312,7 @@
                 </StackPanel>
                 <!--  Search box: wrapped in a grid to enable RepositionThemeTransitions  -->
                 <Grid Grid.Column="1" HorizontalAlignment="Stretch">
-                    <!--
-                      Why disable it and make it transparent?
-                      To prevent the container from collapsing, ensuring the layout metrics remain unchanged.
-                    -->
                     <cpcontrols:SearchBar
-                        IsEnabled="{x:Bind ViewModel.CurrentPage.HasSearchBox, Mode=OneWay}"
-                        Opacity="{x:Bind ViewModel.CurrentPage.HasSearchBox, Mode=OneWay, Converter={StaticResource BoolToOpacityConverter}}"
                         x:Name="SearchBox"
                         HorizontalAlignment="Stretch"
                         CurrentPageViewModel="{x:Bind ViewModel.CurrentPage, Mode=OneWay}" />
@@ -366,9 +355,7 @@
                 </animations:Implicit.HideAnimations>
             </ProgressBar>
 
-            <Grid
-                x:Name="ContentGrid"
-                Grid.Row="1">
+            <Grid x:Name="ContentGrid" Grid.Row="1">
 
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="3*" />
@@ -377,6 +364,9 @@
 
                 <Frame
                     Name="RootFrame"
+                    AutomationProperties.LiveSetting="Assertive"
+                    AutomationProperties.AutomationControlType="Pane"
+                    AutomationProperties.LandmarkType="Navigation"
                     IsNavigationStackEnabled="True"
                     Navigated="RootFrame_Navigated" />
 
@@ -477,13 +467,13 @@
 
         <!--
             Horrifying: You may ask yourself - why is there a Background on this InfoBar?
-
+            
             Well, as it turns out, the Informational InfoBar has a transparent
             background. It just cannot be bothered. So, we need to manually give
             it one to actually obscure the text beneath it. And you can't just give
             the InfoBar itself a Background, because then the other Severity's
             won't get colorized.
-
+            
             See https://github.com/microsoft/microsoft-ui-xaml/issues/5741
         -->
         <StackPanel
@@ -510,7 +500,11 @@
             </InfoBar>
         </StackPanel>
 
-        <Grid Grid.Row="1" Background="{ThemeResource LayerOnAcrylicSecondaryBackgroundBrush}" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}">
+        <Grid
+            Grid.Row="1"
+            Background="{ThemeResource LayerOnAcrylicSecondaryBackgroundBrush}"
+            BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+            BorderThickness="0,1,0,0">
             <cpcontrols:CommandBar CurrentPageViewModel="{x:Bind ViewModel.CurrentPage, Mode=OneWay}" />
         </Grid>
 
@@ -524,6 +518,26 @@
                     <VisualState.Setters>
                         <Setter Target="DetailsContent.Visibility" Value="Visible" />
                         <Setter Target="DetailsColumn.Width" Value="2*" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+            <VisualStateGroup>
+                <!--
+                Why disable it and make it transparent?
+                To prevent the container from collapsing, ensuring the layout metrics remain unchanged.
+                -->
+                <VisualStateGroup.Transitions>
+                    <VisualTransition GeneratedDuration="0:0:0.187" To="SearchBarCollapsed" />
+                </VisualStateGroup.Transitions>
+                <VisualState x:Name="SearchBarVisible" />
+                <VisualState x:Name="SearchBarCollapsed">
+                    <VisualState.StateTriggers>
+                        <StateTrigger IsActive="{x:Bind h:BindTransformers.Negate(ViewModel.IsSearchBoxVisible), Mode=OneWay}" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="SearchBox.IsEnabled" Value="False" />
+                        <Setter Target="SearchBox.Opacity" Value="0" />
+                        <Setter Target="TopBarGrid.BorderBrush" Value="Transparent" />
                     </VisualState.Setters>
                 </VisualState>
             </VisualStateGroup>
