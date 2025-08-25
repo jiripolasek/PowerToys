@@ -8,7 +8,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
-
+using ManagedCommon;
 using Microsoft.CmdPal.Common.Services.Sanitizer.Abstraction;
 
 namespace Microsoft.CmdPal.Common.Services.Sanitizer;
@@ -140,7 +140,7 @@ internal sealed class ProfilePathAndUsernameRuleProvider : ISanitizationRuleProv
                 }
             }
 
-            ReadOnlySpan<string> envVars = ["USERPROFILE", "HOME", "OneDrive", "OneDriveCommercial"];
+            string[] envVars = ["USERPROFILE", "HOME", "OneDrive", "OneDriveCommercial"];
             foreach (var envVar in envVars)
             {
                 var envPath = Environment.GetEnvironmentVariable(envVar);
@@ -150,9 +150,9 @@ internal sealed class ProfilePathAndUsernameRuleProvider : ISanitizationRuleProv
                 }
             }
         }
-        catch
+        catch (Exception ex)
         {
-            // Best-effort; fall back to generic rules.
+            Logger.LogError("Error detecting system profile paths and usernames", ex);
         }
     }
 
