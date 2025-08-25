@@ -137,11 +137,28 @@ internal sealed class SecretKeyValueRulesProvider : ISanitizationRuleProvider
 
         var keysAlt = string.Join("|", patterns);
 
-        // Preserve key + sep; redact only the value. Quoted or unquoted values supported.
         var pattern =
             $"""
-             (?<![A-Za-z0-9])(?<key>(?:{keysAlt}))(?![A-Za-z0-9])\s*(?<sep>{separatorsClass})\s*
-             (?:(?<q>["'])(?<val>[^"']+)\k<q>|(?<val>[^{unquotedStopClass}]+))
+             # Negative lookbehind to ensure the key is not part of a larger word
+             (?<![A-Za-z0-9])
+             # Match and capture the key (from the provided list)
+             (?<key>(?:{keysAlt}))
+             # Negative lookahead to ensure the key is not part of a larger word
+             (?![A-Za-z0-9])
+             # Optional whitespace between key and separator
+             \s*
+             # Separator (e.g., ':' or '=')
+             (?<sep>{separatorsClass})
+             # Optional whitespace after separator
+             \s*
+             # Match and capture the value, supporting quoted or unquoted values
+             (?:
+                 # Quoted value: match opening quote, value, and closing quote
+                 (?<q>["'])(?<val>[^"']+)\k<q>
+                 |
+                 # Unquoted value: match up to the next whitespace
+                 (?<val>[^{unquotedStopClass}]+)
+             )
              """;
 
         var rx = new Regex(
