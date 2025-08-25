@@ -2,23 +2,13 @@
 // The Microsoft Corporation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System;
-using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Linq;
-using System.Runtime.InteropServices.WindowsRuntime;
 using ManagedCommon;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Controls.Primitives;
-using Microsoft.UI.Xaml.Data;
-using Microsoft.UI.Xaml.Input;
-using Microsoft.UI.Xaml.Media;
-using Microsoft.UI.Xaml.Navigation;
-using PowerToys.Interop;
-using Windows.Foundation;
-using Windows.Foundation.Collections;
+using Windows.Win32;
+using Windows.Win32.Foundation;
+using Windows.Win32.UI.WindowsAndMessaging;
 
 namespace Microsoft.CmdPal.UI.Settings;
 
@@ -58,15 +48,19 @@ public sealed partial class InternalPage : Page
     {
         try
         {
-            var logPath = Logger.CurrentVersionLogDirectoryPath;
-            if (Directory.Exists(logPath))
+            var logDirPath = Logger.CurrentVersionLogDirectoryPath;
+            if (!string.IsNullOrWhiteSpace(logDirPath) && Directory.Exists(logDirPath))
             {
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = "explorer.exe",
-                    Arguments = logPath,
+                    Arguments = logDirPath,
                     UseShellExecute = true,
                 });
+            }
+            else
+            {
+                PInvoke.MessageBox(HWND.Null, "Can't find the log directory", "Error", MESSAGEBOX_STYLE.MB_OK);
             }
         }
         catch (Exception ex)
