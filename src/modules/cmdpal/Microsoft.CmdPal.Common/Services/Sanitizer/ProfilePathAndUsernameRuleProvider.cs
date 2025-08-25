@@ -130,15 +130,10 @@ internal sealed class ProfilePathAndUsernameRuleProvider : ISanitizationRuleProv
                     continue;
                 }
 
-                _profilePaths.Add(dir, $"[{folder.ToString().ToUpperInvariant()}_DIR]");
-
-                var pathParts = dir.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                foreach (var part in pathParts)
+                var added = _profilePaths.TryAdd(dir, $"[{folder.ToString().ToUpperInvariant()}_DIR]");
+                if (!added)
                 {
-                    if (!string.IsNullOrEmpty(part) && part.Length > 2 && !CommonPathParts.Contains(part))
-                    {
-                        _usernames.Add(part);
-                    }
+                    continue;
                 }
             }
 
@@ -148,7 +143,7 @@ internal sealed class ProfilePathAndUsernameRuleProvider : ISanitizationRuleProv
                 var envPath = Environment.GetEnvironmentVariable(envVar);
                 if (!string.IsNullOrEmpty(envPath) && Directory.Exists(envPath))
                 {
-                    _profilePaths.Add(envPath, $"[{envVar.ToUpperInvariant()}_DIR]");
+                    _profilePaths.TryAdd(envPath, $"[{envVar.ToUpperInvariant()}_DIR]");
                 }
             }
         }
