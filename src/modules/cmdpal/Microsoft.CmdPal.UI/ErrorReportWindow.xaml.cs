@@ -160,6 +160,8 @@ internal sealed partial class ErrorReportWindow
     {
         var failureReason = AppInstance.Restart(string.Empty);
 
+        // if the restart is successful, the app will exit, and we won't reach this point
+
         if (failureReason == AppRestartFailureReason.RestartPending)
         {
             return;
