@@ -1241,8 +1241,7 @@ phwnd
 pici
 pidl
 PIDLIST
-Pii
-PII
+pii
 pinfo
 pinvoke
 pipename
