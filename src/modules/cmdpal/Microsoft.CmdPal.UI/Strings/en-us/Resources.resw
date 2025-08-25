@@ -556,4 +556,10 @@ Right-click to remove the key combination, thereby deactivating the shortcut.</v
   <data name="ErrorReportWindow_RestartFailedMessageBox_Title" xml:space="preserve">
     <value>Restart failed</value>
   </data>
+  <data name="NavigationPaneClosed" xml:space="preserve">
+    <value>Navigation pane closed</value>
+  </data>
+  <data name="NavigationPageOpened" xml:space="preserve">
+    <value>Navigation page opened</value>
+  </data>
 </root>
