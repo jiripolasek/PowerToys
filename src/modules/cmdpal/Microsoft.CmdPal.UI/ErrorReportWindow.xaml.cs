@@ -28,6 +28,7 @@ namespace Microsoft.CmdPal.UI;
 /// </remarks>
 internal sealed partial class ErrorReportWindow
 {
+    private const int ErrorReportExitCode = 100;
     private readonly Options _options;
 
     public ErrorReportWindow(Options options)
@@ -179,7 +180,7 @@ internal sealed partial class ErrorReportWindow
 
     private static void ExitApp()
     {
-        Environment.Exit(100);
+        Environment.Exit(ErrorReportExitCode);
     }
 
     private static void RevealFileSafe(string? path)
