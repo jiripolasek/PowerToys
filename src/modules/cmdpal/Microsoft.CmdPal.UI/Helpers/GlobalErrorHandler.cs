@@ -125,7 +125,13 @@ internal sealed partial class GlobalErrorHandler : IDisposable
         // Optionally store a copy on the desktop for user (in)convenience
         if (storeOnDesktop)
         {
-            reportPath ??= Save(report, name, () => Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory));
+            var path = Save(report, name, () => Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory));
+
+            // show the desktop copy if both succeeded
+            if (path != null)
+            {
+                reportPath = path;
+            }
         }
 
         return reportPath;
