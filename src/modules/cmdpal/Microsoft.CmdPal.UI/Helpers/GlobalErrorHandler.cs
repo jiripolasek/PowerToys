@@ -312,22 +312,4 @@ internal sealed partial class GlobalErrorHandler : IDisposable
         UnobservedTaskException,
         AppDomainUnhandledException,
     }
-
-    public enum ExceptionRecoverability
-    {
-        /// <summary>
-        /// Safe to retry (e.g. network timeout)
-        /// </summary>
-        Retryable,
-
-        /// <summary>
-        /// Operation failed, but app can continue
-        /// </summary>
-        Recoverable,
-
-        /// <summary>
-        /// Fatal, must restart or terminate
-        /// </summary>
-        Unrecoverable,
-    }
 }
