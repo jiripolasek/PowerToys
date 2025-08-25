@@ -42,8 +42,6 @@ internal sealed partial class PiiRuleProvider : ISanitizationRuleProvider
                     (?!                              # ISO datetime like 2025-08-24T14:32[:ss][Z|±hh:mm]
                        (?:19|20)\d{2}-\d{2}-\d{2}[T\s]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?\b
                     )
-                    (?!\b(?:\d{4}[-\s]?){3}\d{4}\b)  # credit card 4-4-4-4 style
-                    (?!\b\d{3}-\d{2}-\d{4}\b)        # US SSN
                     (?!\b(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?\b)   # IPv4 with optional :port
                     (?!\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b)  # GUID, lowercase
                     (?!\b[0-9A-F]{8}-(?:[0-9A-F]{4}-){3}[0-9A-F]{12}\b)  # GUID, uppercase
