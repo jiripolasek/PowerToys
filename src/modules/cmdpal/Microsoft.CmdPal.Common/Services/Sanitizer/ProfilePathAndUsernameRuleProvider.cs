@@ -108,7 +108,7 @@ internal sealed class ProfilePathAndUsernameRuleProvider : ISanitizationRuleProv
                 }
             }
 
-            ReadOnlySpan<Environment.SpecialFolder> profileFolders =
+            Environment.SpecialFolder[] profileFolders =
             [
                 Environment.SpecialFolder.ApplicationData,
                 Environment.SpecialFolder.LocalApplicationData,
@@ -117,6 +117,8 @@ internal sealed class ProfilePathAndUsernameRuleProvider : ISanitizationRuleProv
                 Environment.SpecialFolder.MyPictures,
                 Environment.SpecialFolder.MyVideos,
                 Environment.SpecialFolder.MyMusic,
+                Environment.SpecialFolder.StartMenu,
+                Environment.SpecialFolder.Startup,
                 Environment.SpecialFolder.DesktopDirectory
             ];
 
