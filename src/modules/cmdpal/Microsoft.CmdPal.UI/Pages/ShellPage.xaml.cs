@@ -3,6 +3,8 @@
 // See the LICENSE file in the project root for more information.
 
 using System.ComponentModel;
+using System.Globalization;
+using System.Text;
 using CommunityToolkit.Mvvm.Messaging;
 using CommunityToolkit.WinUI;
 using ManagedCommon;
@@ -59,7 +61,7 @@ public sealed partial class ShellPage : Microsoft.UI.Xaml.Controls.Page,
 
     private readonly ToastWindow _toast = new();
 
-    private readonly AutomationPeer _rootFramePeer;
+    private readonly CompositeFormat _pageNavigatedAnnouncement;
 
     private SettingsWindow? _settingsWindow;
 
@@ -93,8 +95,10 @@ public sealed partial class ShellPage : Microsoft.UI.Xaml.Controls.Page,
         AddHandler(KeyDownEvent, new KeyEventHandler(ShellPage_OnKeyDown), false);
         AddHandler(PointerPressedEvent, new PointerEventHandler(ShellPage_OnPointerPressed), true);
 
-        _rootFramePeer = FrameworkElementAutomationPeer.FromElement(RootFrame) ?? new FrameworkElementAutomationPeer(RootFrame);
         RootFrame.Navigate(typeof(LoadingPage), ViewModel);
+
+        var pageAnnouncementFormat = ResourceLoaderInstance.GetString("ScreenReader_Announcement_NavigatedToPage0");
+        _pageNavigatedAnnouncement = CompositeFormat.Parse(pageAnnouncementFormat);
     }
 
     public void Receive(NavigateBackMessage message)
@@ -501,10 +505,10 @@ public sealed partial class ShellPage : Microsoft.UI.Xaml.Controls.Page,
             pageTitle = ResourceLoaderInstance.GetString("UntitledPageTitle");
         }
 
-        var announcement = $"Navigated to {pageTitle} page";
+        var announcement = string.Format(CultureInfo.CurrentCulture, _pageNavigatedAnnouncement.Format, pageTitle);
 
         // Logger.LogDebug("Attempting to announce " + announcement);
-        _rootFramePeer.AnnounceActionForAccessibility(announcement, "CommandPalettePageNavigatedTo");
+        RootFrame.AnnounceActionForAccessibility(announcement, "CommandPalettePageNavigatedTo");
     }
 
     /// <summary>
