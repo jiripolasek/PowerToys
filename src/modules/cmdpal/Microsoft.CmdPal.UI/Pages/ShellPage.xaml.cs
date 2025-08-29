@@ -483,7 +483,7 @@ public sealed partial class ShellPage : Microsoft.UI.Xaml.Controls.Page,
                     // Update the search box visibility based on the current page:
                     // - We do this here after navigation so the focus is not jumping around too much,
                     //   it messes with screen readers if we do it too early
-                    // - Since this should hide the search box on content pages, it's to a problem if we
+                    // - Since this should hide the search box on content pages, it's not a problem if we
                     //   wait for the code above to finish trying to focus the content
                     ViewModel.IsSearchBoxVisible = ViewModel.CurrentPage?.HasSearchBox ?? false;
                 });
