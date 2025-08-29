@@ -451,7 +451,7 @@ public sealed partial class ShellPage : Microsoft.UI.Xaml.Controls.Page,
         if (shouldSearchBoxBeVisible || page is not ContentPage)
         {
             ViewModel.IsSearchBoxVisible = shouldSearchBoxBeVisible;
-            SearchBox.Focus(Microsoft.UI.Xaml.FocusState.Programmatic);
+            SearchBox.Focus(FocusState.Programmatic);
             SearchBox.SelectSearch();
         }
         else
@@ -460,22 +460,27 @@ public sealed partial class ShellPage : Microsoft.UI.Xaml.Controls.Page,
             {
                 await page.DispatcherQueue.EnqueueAsync(async () =>
                 {
+                    // I hate this so much, but it can take a while for the page to be ready to accept focus;
+                    // focusing page with MarkdownTextBlock takes up to 5 attempts (* 100ms delay between attempts)
                     for (var i = 0; i < 10; i++)
                     {
                         if (FocusManager.FindFirstFocusableElement(page) is FrameworkElement frameworkElement)
                         {
-                            Logger.LogInfo("Focusing " + frameworkElement + ", attempt " + i);
                             var set = frameworkElement.Focus(FocusState.Programmatic);
-                            Logger.LogInfo("Focused? " + set);
-                            break;
+                            if (set)
+                            {
+                                break;
+                            }
                         }
 
                         await Task.Delay(100);
                     }
 
-                    // Update the search box visibility based on the current page
-                    // We do this here after navigation so the focus is not jumping around too much
-                    // It messes with screen readers if we do it too early
+                    // Update the search box visibility based on the current page:
+                    // - We do this here after navigation so the focus is not jumping around too much,
+                    //   it messes with screen readers if we do it too early
+                    // - Since this should hide the search box on content pages, it's to a problem if we
+                    //   wait for the code above to finish trying to focus the content
                     ViewModel.IsSearchBoxVisible = ViewModel.CurrentPage?.HasSearchBox ?? false;
                 });
             });
