@@ -2,27 +2,31 @@
 // The Microsoft Corporation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using ManagedCommon;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation.Peers;
 
 namespace Microsoft.CmdPal.UI.Helpers;
 
-internal static partial class UIHelper
+public static partial class UIHelper
 {
-    internal static void AnnounceActionForAccessibility(this UIElement ue, string announcement, string activityId)
+    static UIHelper()
     {
-        var peer = FrameworkElementAutomationPeer.FromElement(ue);
-        peer?.AnnounceActionForAccessibility(announcement, activityId);
     }
 
-    internal static void AnnounceActionForAccessibility(this AutomationPeer peer, string announcement, string activityId)
+    public static void AnnounceActionForAccessibility(UIElement ue, string announcement, string activityID)
     {
-        peer.RaiseNotificationEvent(
-            AutomationNotificationKind.ActionCompleted,
-            AutomationNotificationProcessing.ImportantMostRecent,
-            announcement,
-            activityId);
-        Logger.LogInfo($"AnnounceActionForAccessibility Announcement: {announcement}, ActivityId: {activityId}, Peer: {peer.GetName()} CTRL {peer.IsControlElement()} CNT {peer.IsContentElement()}");
+        if (FrameworkElementAutomationPeer.FromElement(ue) is AutomationPeer peer)
+        {
+            peer.RaiseNotificationEvent(
+                AutomationNotificationKind.ActionCompleted,
+                AutomationNotificationProcessing.ImportantMostRecent,
+                announcement,
+                activityID);
+        }
     }
 }
