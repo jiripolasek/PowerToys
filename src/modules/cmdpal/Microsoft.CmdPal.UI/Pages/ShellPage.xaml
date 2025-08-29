@@ -9,13 +9,13 @@
     xmlns:coreViewModels="using:Microsoft.CmdPal.Core.ViewModels"
     xmlns:cpcontrols="using:Microsoft.CmdPal.UI.Controls"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:h="using:Microsoft.CmdPal.UI.Helpers"
     xmlns:help="using:Microsoft.CmdPal.UI.Helpers"
     xmlns:labToolkit="using:CommunityToolkit.Labs.WinUI.MarkdownTextBlock"
     xmlns:markdownTextBlockRns="using:CommunityToolkit.WinUI.Controls.MarkdownTextBlockRns"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:toolkit="using:CommunityToolkit.WinUI.Controls"
     xmlns:ui="using:CommunityToolkit.WinUI"
-    xmlns:h="using:Microsoft.CmdPal.UI.Helpers"
     Background="Transparent"
     mc:Ignorable="d">
 
@@ -364,9 +364,9 @@
 
                 <Frame
                     Name="RootFrame"
-                    AutomationProperties.LiveSetting="Assertive"
                     AutomationProperties.AutomationControlType="Pane"
                     AutomationProperties.LandmarkType="Navigation"
+                    AutomationProperties.LiveSetting="Assertive"
                     IsNavigationStackEnabled="True"
                     Navigated="RootFrame_Navigated" />
 
@@ -523,8 +523,8 @@
             </VisualStateGroup>
             <VisualStateGroup>
                 <!--
-                Why disable it and make it transparent?
-                To prevent the container from collapsing, ensuring the layout metrics remain unchanged.
+                    Why disable it and make it transparent?
+                    To prevent the container from collapsing, ensuring the layout metrics remain unchanged.
                 -->
                 <VisualStateGroup.Transitions>
                     <VisualTransition GeneratedDuration="0:0:0.187" To="SearchBarCollapsed" />
