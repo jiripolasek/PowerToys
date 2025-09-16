@@ -2,6 +2,8 @@
 // The Microsoft Corporation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using Microsoft.CmdPal.Common.Services;
+
 namespace Microsoft.CmdPal.Core.ViewModels;
 
 public interface IRootPageService
@@ -32,6 +34,12 @@ public interface IRootPageService
     /// or ICommandContextItem that was used to invoke the command.
     /// </summary>
     void OnPerformCommand(object? context, bool topLevel, AppExtensionHost? currentHost);
+
+    /// <summary>
+    /// Called when a command is cancelled. The previousHost is the
+    /// host that was active before the command was cancelled.
+    /// </summary>
+    void OnCancelledCommand(AppExtensionHost? previousHost);
 
     void GoHome();
 }

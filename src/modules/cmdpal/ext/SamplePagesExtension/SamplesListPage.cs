@@ -89,6 +89,13 @@ public partial class SamplesListPage : ListPage
             Subtitle = "A demo of the settings helpers",
         },
 
+        new ListItem(new SamplePageFactoryPage())
+        {
+            Title = "Sample page factory",
+            Subtitle = "A demo of page factory",
+            Icon = new IconInfo("\ue806"),
+        },
+
         // Evil edge cases
         // Anything weird that might break the palette - put that in here.
         new ListItem(new EvilSamplesPage())

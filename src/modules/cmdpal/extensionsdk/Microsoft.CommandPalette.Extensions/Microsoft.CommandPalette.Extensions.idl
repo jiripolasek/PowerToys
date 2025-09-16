@@ -242,6 +242,11 @@ namespace Microsoft.CommandPalette.Extensions
     
         OptionalColor AccentColor { get; };
     }
+
+    [contract(Microsoft.CommandPalette.Extensions.ExtensionsContract, 1)]
+    interface IPageFactoryCommand requires ICommand {
+        IPage CreatePage();
+    }
     
     [uuid("c78b9851-e76b-43ee-8f76-da5ba14e69a4")]
     [contract(Microsoft.CommandPalette.Extensions.ExtensionsContract, 1)]

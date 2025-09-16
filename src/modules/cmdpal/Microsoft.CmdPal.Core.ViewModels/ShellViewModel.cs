@@ -2,6 +2,7 @@
 // The Microsoft Corporation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+#pragma warning disable SA1116, SA1117, SA1501, SA1513, CA1816
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using CommunityToolkit.Mvvm.Messaging;
@@ -14,7 +15,8 @@ namespace Microsoft.CmdPal.Core.ViewModels;
 
 public partial class ShellViewModel : ObservableObject,
     IRecipient<PerformCommandMessage>,
-    IRecipient<HandleCommandResultMessage>
+    IRecipient<HandleCommandResultMessage>,
+    IDisposable
 {
     private readonly IRootPageService _rootPageService;
     private readonly IAppHostService _appHostService;
@@ -22,6 +24,9 @@ public partial class ShellViewModel : ObservableObject,
     private readonly IPageViewModelFactoryService _pageViewModelFactory;
     private readonly Lock _invokeLock = new();
     private Task? _handleInvokeTask;
+
+    // Cancellation for in-flight PerformCommand operations
+    private CancellationTokenSource? _performCommandCts;
 
     [ObservableProperty]
     public partial bool IsLoaded { get; set; } = false;
@@ -177,18 +182,38 @@ public partial class ShellViewModel : ObservableObject,
         }
     }
 
-    public void Receive(PerformCommandMessage message)
+    public async void Receive(PerformCommandMessage message)
     {
-        PerformCommand(message);
+        try
+        {
+            await PerformCommandAsync(message);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("Exception handling", ex);
+        }
     }
 
-    private void PerformCommand(PerformCommandMessage message)
+    private async Task PerformCommandAsync(PerformCommandMessage message)
     {
+        // Synchronously cancel and dispose previous token source before starting new work
+        if (_performCommandCts != null)
+        {
+            _performCommandCts.Cancel(); // synchronous cancel (no await)
+            _performCommandCts.Dispose();
+            _performCommandCts = null;
+        }
+
+        _performCommandCts = new CancellationTokenSource();
+        var ct = _performCommandCts.Token;
+
         var command = message.Command.Unsafe;
         if (command is null)
         {
             return;
         }
+
+        var currentHost = CurrentPage.ExtensionHost;
 
         var host = _appHostService.GetHostForCommand(message.Context, CurrentPage.ExtensionHost);
 
@@ -196,6 +221,25 @@ public partial class ShellViewModel : ObservableObject,
 
         try
         {
+            if (command is IPageFactoryCommand pageFactoryCommand)
+            {
+                Logger.LogDebug("Getting a page...");
+                command = await Task.Run(
+                    () =>
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        var newPage = pageFactoryCommand.CreatePage();
+                        ct.ThrowIfCancellationRequested();
+                        return newPage;
+                    },
+                    ct).ConfigureAwait(false);
+            }
+
+            if (ct.IsCancellationRequested)
+            {
+                return;
+            }
+
             if (command is IPage page)
             {
                 Logger.LogDebug($"Navigating to page");
@@ -211,21 +255,36 @@ public partial class ShellViewModel : ObservableObject,
                     throw new NotSupportedException();
                 }
 
+                if (ct.IsCancellationRequested)
+                {
+                    (pageViewModel as IDisposable)?.Dispose();
+                    return;
+                }
+
                 // Kick off async loading of our ViewModel
                 LoadPageViewModel(pageViewModel);
-                OnUIThread(() => { WeakReferenceMessenger.Default.Send<UpdateCommandBarMessage>(new(null)); });
-                WeakReferenceMessenger.Default.Send<NavigateToPageMessage>(new(pageViewModel, message.WithAnimation));
-
-                // Note: Originally we set our page back in the ViewModel here, but that now happens in response to the Frame navigating triggered from the above
-                // See RootFrame_Navigated event handler.
+                OnUIThread(static () =>
+                {
+                    WeakReferenceMessenger.Default.Send(new UpdateCommandBarMessage(null));
+                });
+                WeakReferenceMessenger.Default.Send(new NavigateToPageMessage(pageViewModel, message.WithAnimation));
             }
             else if (command is IInvokableCommand invokable)
             {
                 Logger.LogDebug($"Invoking command");
+                if (ct.IsCancellationRequested)
+                {
+                    return;
+                }
 
                 WeakReferenceMessenger.Default.Send<BeginInvokeMessage>();
                 StartInvoke(message, invokable, host);
             }
+        }
+        catch (OperationCanceledException)
+        {
+            // Operation was cancelled, nothing to do.
+            _rootPageService.OnCancelledCommand(currentHost);
         }
         catch (Exception ex)
         {
@@ -373,4 +432,26 @@ public partial class ShellViewModel : ObservableObject,
             TaskCreationOptions.None,
             _scheduler);
     }
+
+    protected virtual void Dispose(bool disposing)
+    {
+        if (!disposing)
+        {
+            return;
+        }
+
+        _performCommandCts?.Cancel();
+        _performCommandCts?.Dispose();
+        _performCommandCts = null;
+
+        WeakReferenceMessenger.Default.Unregister<PerformCommandMessage>(this);
+        WeakReferenceMessenger.Default.Unregister<HandleCommandResultMessage>(this);
+    }
+
+    public void Dispose()
+    {
+        Dispose(true);
+        GC.SuppressFinalize(this);
+    }
 }
+#pragma warning restore SA1116, SA1117, SA1501, SA1513, CA1816
