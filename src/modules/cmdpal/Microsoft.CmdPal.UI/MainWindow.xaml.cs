@@ -134,7 +134,7 @@ public sealed partial class MainWindow : WindowEx,
     {
         // Tool windows don't show up in ALT+TAB, and don't show up in the taskbar
         // Since tool windows have smaller corner radii, we need to force the normal ones
-        this.ToggleExtendedWindowStyle(WINDOW_EX_STYLE.WS_EX_TOOLWINDOW, !Debugger.IsAttached);
+        this.SetToolWindowStyleSafe(!Debugger.IsAttached);
         this.SetCornerPreference(DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_ROUND);
     }
 

@@ -43,7 +43,7 @@ public sealed partial class ToastWindow : WindowEx,
         // Tool windows don't show up in ALT+TAB, and don't show up in the taskbar
         // Since tool windows have smaller corner radii, we need to force the normal ones
         // to visually match system toasts.
-        this.ToggleExtendedWindowStyle(WINDOW_EX_STYLE.WS_EX_TOOLWINDOW, true);
+        this.SetToolWindowStyleSafe(true);
         this.SetCornerPreference(DWM_WINDOW_CORNER_PREFERENCE.DWMWCP_ROUND);
 
         _hwnd = new HWND(WinRT.Interop.WindowNative.GetWindowHandle(this).ToInt32());
