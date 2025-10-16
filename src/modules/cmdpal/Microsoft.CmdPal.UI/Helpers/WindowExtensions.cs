@@ -86,7 +86,7 @@ internal static class WindowExtensions
     /// Sets or removes the tool window style for the specified window using all available methods.
     /// </summary>
     /// <param name="window">The window to modify.</param>
-    /// <param name="isToolWindow">True to make the window a tool window (hidden from Alt+Tab); false to make it a normal window.</param>
+    /// <param name="isToolWindow">True to turn the window into a tool window (hidden from Alt+Tab); false to make it a normal window.</param>
     internal static void SetToolWindowStyleSafe(this Window window, bool isToolWindow)
     {
         ArgumentNullException.ThrowIfNull(window);
