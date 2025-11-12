@@ -16,7 +16,7 @@ using Windows.UI.ViewManagement;
 
 namespace Microsoft.CmdPal.UI.ViewModels;
 
-public sealed partial class AppearanceSettingsViewModel : ObservableObject
+public sealed partial class AppearanceSettingsViewModel : ObservableObject, IDisposable
 {
     private readonly SettingsModel _settings;
     private readonly UISettings _uiSettings;
@@ -360,5 +360,11 @@ public sealed partial class AppearanceSettingsViewModel : ObservableObject
     private void ResetBackgroundImage()
     {
         BackgroundImagePath = string.Empty;
+    }
+
+    public void Dispose()
+    {
+        _uiSettings.ColorValuesChanged -= UiSettingsOnColorValuesChanged;
+        _themeService.ThemeChanged -= ThemeServiceOnThemeChanged;
     }
 }
