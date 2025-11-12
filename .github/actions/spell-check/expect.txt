@@ -1864,10 +1864,10 @@ Uniquifies
 unitconverter
 unittests
 UNLEN
+Uninitializes
 UNORM
 unremapped
-uninitializes
-unsubscribes
+Unsubscribes
 unvirtualized
 unwide
 unzoom
