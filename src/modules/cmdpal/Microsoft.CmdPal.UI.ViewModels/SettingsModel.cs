@@ -10,6 +10,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.CmdPal.UI.ViewModels.Settings;
 using Microsoft.CommandPalette.Extensions.Toolkit;
 using Windows.Foundation;
+using Windows.UI;
 
 namespace Microsoft.CmdPal.UI.ViewModels;
 
@@ -55,6 +56,20 @@ public partial class SettingsModel : ObservableObject
     public bool DisableAnimations { get; set; } = true;
 
     public WindowPosition? LastWindowPosition { get; set; }
+
+    public UserTheme Theme { get; set; } = UserTheme.Default;
+
+    public ColorizationMode ColorizationMode { get; set; }
+
+    public Color CustomThemeColor { get; set; } = Color.FromArgb(0, 0, 0, 0);
+
+    public int CustomThemeColorIntensity { get; set; } = 100;
+
+    public int BackgroundImageOpacity { get; set; } = 20;
+
+    public BackgroundImageFit BackgroundImageFit { get; set; }
+
+    public string? BackgroundImagePath { get; set; }
 
     // END SETTINGS
     ///////////////////////////////////////////////////////////////////////////
