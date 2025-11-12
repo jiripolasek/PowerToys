@@ -9,6 +9,7 @@ using System.Text.Json.Serialization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.CmdPal.UI.ViewModels.Settings;
 using Microsoft.CommandPalette.Extensions.Toolkit;
+using Microsoft.UI;
 using Windows.Foundation;
 using Windows.UI;
 
@@ -61,7 +62,7 @@ public partial class SettingsModel : ObservableObject
 
     public ColorizationMode ColorizationMode { get; set; }
 
-    public Color CustomThemeColor { get; set; } = Color.FromArgb(0, 0, 0, 0);
+    public Color CustomThemeColor { get; set; } = Colors.Transparent;
 
     public int CustomThemeColorIntensity { get; set; } = 100;
 

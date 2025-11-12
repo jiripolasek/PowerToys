@@ -23,11 +23,11 @@ namespace Microsoft.CmdPal.UI.Services;
 /// </summary>
 internal sealed partial class ThemeService : IThemeService, IDisposable
 {
-    private static readonly TimeSpan ReloadDebounceInterval = TimeSpan.FromMicroseconds(500);
+    private static readonly TimeSpan ReloadDebounceInterval = TimeSpan.FromMilliseconds(500);
+
     private readonly UISettings _uiSettings;
     private readonly SettingsModel _settings;
     private readonly ResourceSwapper _resourceSwapper;
-
     private readonly NormalThemeProvider _normalThemeProvider;
     private readonly ColorfulThemeProvider _colorfulThemeProvider;
 

@@ -272,6 +272,11 @@ public sealed partial class AppearanceSettingsViewModel : ObservableObject
 
     public int BackgroundImageFitIndex
     {
+        // Naming between UI facing string and enum is a bit confusing, but the enum fields
+        // are based on XAML Stretch enum values. So I'm choosing to keep the confusion here, close
+        // to the UI.
+        // - BackgroundImageFit.Fill corresponds to "Stretch"
+        // - BackgroundImageFit.UniformToFill corresponds to "Fill"
         get => BackgroundImageFit switch
         {
             BackgroundImageFit.Fill => 1,

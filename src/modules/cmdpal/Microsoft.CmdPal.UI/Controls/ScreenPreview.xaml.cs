@@ -18,8 +18,8 @@ public sealed partial class ScreenPreview : UserControl
 
     public object PreviewContent
     {
-        get { return (object)GetValue(PreviewContentProperty)!; }
-        set { SetValue(PreviewContentProperty, value); }
+        get => GetValue(PreviewContentProperty)!;
+        set => SetValue(PreviewContentProperty, value);
     }
 
     public ScreenPreview()

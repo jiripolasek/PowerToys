@@ -4,7 +4,7 @@
 
 using Windows.UI;
 
-// IDE0047 (remove rendudant parentheses) clashes with stylecop rules
+// IDE0047 (remove redundant parentheses) clashes with stylecop rules
 #pragma warning disable IDE0047
 
 namespace Microsoft.CmdPal.UI.Helpers;
