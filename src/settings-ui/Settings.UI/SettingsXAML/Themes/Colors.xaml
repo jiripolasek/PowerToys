@@ -1,24 +1,22 @@
-﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                    xmlns:windowsUI="using:Windows.UI">
+﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <ResourceDictionary.ThemeDictionaries>
         <ResourceDictionary x:Key="Dark">
             <SolidColorBrush x:Key="InfoBarInformationalSeverityBackgroundBrush" Color="#FF34424d" />
-            <windowsUI:Color x:Key="InfoBarInformationalSeverityIconBackground">#FF5fb2f2</windowsUI:Color>
+            <Color x:Key="InfoBarInformationalSeverityIconBackground">#FF5fb2f2</Color>
             <SolidColorBrush x:Key="SolidBackgroundBrush" Color="Black" />
         </ResourceDictionary>
 
         <ResourceDictionary x:Key="Light">
             <SolidColorBrush x:Key="InfoBarInformationalSeverityBackgroundBrush" Color="#FFd3e7f7" />
-            <windowsUI:Color x:Key="InfoBarInformationalSeverityIconBackground">#FF0063b1</windowsUI:Color>
+            <Color x:Key="InfoBarInformationalSeverityIconBackground">#FF0063b1</Color>
             <SolidColorBrush x:Key="SolidBackgroundBrush" Color="White" />
         </ResourceDictionary>
 
         <ResourceDictionary x:Key="HighContrast">
             <SolidColorBrush x:Key="InfoBarInformationalSeverityBackgroundBrush" Color="{StaticResource SystemColorWindowColor}" />
             <SolidColorBrush x:Key="SolidBackgroundBrush" Color="{StaticResource SystemColorWindowTextColor}" />
-            <windowsUI:Color x:Key="InfoBarInformationalSeverityIconBackground">#FF5fb2f2</windowsUI:Color>
+            <Color x:Key="InfoBarInformationalSeverityIconBackground">#FF5fb2f2</Color>
         </ResourceDictionary>
     </ResourceDictionary.ThemeDictionaries>
 </ResourceDictionary>
