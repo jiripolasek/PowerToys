@@ -30,7 +30,14 @@ public sealed partial class ColorPalette : UserControl
             if (_selectedColor != value)
             {
                 _selectedColor = value;
-                SetValue(SelectedColorProperty, value!);
+                if (value is not null)
+                {
+                    SetValue(SelectedColorProperty, value);
+                }
+                else
+                {
+                    ClearValue(SelectedColorProperty);
+                }
             }
         }
     }

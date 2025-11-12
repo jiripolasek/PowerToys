@@ -545,7 +545,7 @@ Right-click to remove the key combination, thereby deactivating the shortcut.</v
     <value>Dark</value>
   </data>
   <data name="Settings_GeneralPage_BackgroundTint_SettingsCard.Header" xml:space="preserve">
-    <value>Background color</value>
+    <value>Custom color tint</value>
   </data>
   <data name="Settings_GeneralPage_BackgroundTintIntensity_SettingsCard.Header" xml:space="preserve">
     <value>Color intensity</value>
@@ -606,5 +606,11 @@ Right-click to remove the key combination, thereby deactivating the shortcut.</v
   </data>
   <data name="Settings_GeneralPage_BackgroundImage_ResetImageButton.Content" xml:space="preserve">
     <value>Remove image</value>
+  </data>
+  <data name="Settings_GeneralPage_BackgroundColor_SettingsExpander.Header" xml:space="preserve">
+    <value>Background color</value>
+  </data>
+  <data name="Settings_GeneralPage_BackgroundColor_SettingsExpander.Description" xml:space="preserve">
+    <value>Choose a custom background color or use the current accent color</value>
   </data>
 </root>

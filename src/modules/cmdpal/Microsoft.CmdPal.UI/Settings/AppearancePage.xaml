@@ -65,7 +65,7 @@
                     </controls:SettingsCard>
 
                     <controls:SettingsExpander
-                        x:Uid="Settings_GeneralPage_BackgroundTint_SettingsCard"
+                        x:Uid="Settings_GeneralPage_BackgroundColor_SettingsExpander"
                         HeaderIcon="{ui:FontIcon Glyph=&#xE790;}"
                         IsExpanded="True">
                         <controls:SettingsExpander.Content>

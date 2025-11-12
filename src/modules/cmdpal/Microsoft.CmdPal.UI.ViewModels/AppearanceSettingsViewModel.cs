@@ -293,10 +293,23 @@ public sealed partial class AppearanceSettingsViewModel : ObservableObject, IDis
 
     public ElementTheme EffectiveTheme => _elementThemeOverride ?? _themeService.Current.Theme;
 
-    public ImageSource? EffectiveBackgroundImageSource =>
-        Uri.TryCreate(BackgroundImagePath, UriKind.RelativeOrAbsolute, out var uri)
-            ? new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(uri)
-            : null;
+    public ImageSource? EffectiveBackgroundImageSource
+    {
+        get
+        {
+            try
+            {
+                return !string.IsNullOrWhiteSpace(BackgroundImagePath) && Uri.TryCreate(BackgroundImagePath, UriKind.RelativeOrAbsolute, out var uri)
+                    ? new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(uri)
+                    : null;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex);
+                throw;
+            }
+        }
+    }
 
     public AppearanceSettingsViewModel(IThemeService themeService, SettingsModel settings)
     {
