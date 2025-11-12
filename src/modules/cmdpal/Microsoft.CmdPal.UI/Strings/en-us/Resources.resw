@@ -517,6 +517,12 @@ Right-click to remove the key combination, thereby deactivating the shortcut.</v
   <data name="Settings_ExtensionsPage_SearchBox_Placeholder.PlaceholderText" xml:space="preserve">
     <value>Search extensions</value>
   </data>
+  <data name="GlobalErrorHandler_CrashMessageBox_Message" xml:space="preserve">
+    <value>Command Palette has encountered a fatal error and must close.</value>
+  </data>
+  <data name="GlobalErrorHandler_CrashMessageBox_Caption" xml:space="preserve">
+    <value>Command Palette - Fatal error</value>
+  </data>
   <data name="Settings_GeneralPage_NavigationViewItem_Appearance.Content" xml:space="preserve">
     <value>Personalization</value>
   </data>
