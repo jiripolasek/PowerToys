@@ -127,34 +127,45 @@ public sealed partial class AppearanceSettingsViewModel : ObservableObject, IDis
             {
                 _settings.ColorizationMode = value;
                 OnPropertyChanged();
-                OnPropertyChanged(nameof(Colorize));
                 OnPropertyChanged(nameof(ColorizationModeIndex));
                 OnPropertyChanged(nameof(IsCustomTintVisible));
                 OnPropertyChanged(nameof(IsCustomTintIntensityVisible));
+                OnPropertyChanged(nameof(IsBackgroundControlsVisible));
+                OnPropertyChanged(nameof(IsNoBackgroundVisible));
+                OnPropertyChanged(nameof(IsAccentColorControlsVisible));
+
                 if (value == ColorizationMode.WindowsAccentColor)
                 {
                     ThemeColor = _currentSystemAccentColor;
                 }
+
+                IsColorizationDetailsExpanded = value != ColorizationMode.None;
 
                 Save();
             }
         }
     }
 
-    public bool IsCustomTintVisible => _settings.ColorizationMode == ColorizationMode.CustomColor;
+    public bool IsColorizationDetailsExpanded
+    {
+        get;
+        set => SetProperty(ref field, value);
+    }
 
-    public bool IsCustomTintIntensityVisible => _settings.ColorizationMode is ColorizationMode.CustomColor or ColorizationMode.WindowsAccentColor;
+    public bool IsCustomTintVisible => _settings.ColorizationMode is ColorizationMode.CustomColor or ColorizationMode.Image;
+
+    public bool IsCustomTintIntensityVisible => _settings.ColorizationMode is ColorizationMode.CustomColor or ColorizationMode.WindowsAccentColor or ColorizationMode.Image;
+
+    public bool IsBackgroundControlsVisible => _settings.ColorizationMode is ColorizationMode.Image;
+
+    public bool IsNoBackgroundVisible => _settings.ColorizationMode is ColorizationMode.None;
+
+    public bool IsAccentColorControlsVisible => _settings.ColorizationMode is ColorizationMode.WindowsAccentColor;
 
     public int ColorizationModeIndex
     {
         get => (int)_settings.ColorizationMode;
         set => ColorizationMode = (ColorizationMode)value;
-    }
-
-    public bool Colorize
-    {
-        get => _settings.ColorizationMode is ColorizationMode.CustomColor or ColorizationMode.WindowsAccentColor;
-        set => ColorizationMode = value ? ColorizationMode.CustomColor : ColorizationMode.None;
     }
 
     public Color ThemeColor
@@ -174,22 +185,9 @@ public sealed partial class AppearanceSettingsViewModel : ObservableObject, IDis
                     OnPropertyChanged(nameof(SelectedColorSwatch));
                 }
 
-                if (ColorizationMode != ColorizationMode.CustomColor)
-                {
-                    if (value != _currentSystemAccentColor)
-                    {
-                        ColorizationMode = ColorizationMode.CustomColor;
-                    }
-                }
-
                 if (ColorIntensity == 0)
                 {
                     ColorIntensity = 100;
-                }
-
-                if (!Colorize)
-                {
-                    Colorize = true;
                 }
 
                 Save();
@@ -249,6 +247,34 @@ public sealed partial class AppearanceSettingsViewModel : ObservableObject, IDis
             if (_settings.BackgroundImageOpacity != value)
             {
                 _settings.BackgroundImageOpacity = value;
+                OnPropertyChanged();
+                Save();
+            }
+        }
+    }
+
+    public int BackgroundImageBrightness
+    {
+        get => _settings.BackgroundImageBrightness;
+        set
+        {
+            if (_settings.BackgroundImageBrightness != value)
+            {
+                _settings.BackgroundImageBrightness = value;
+                OnPropertyChanged();
+                Save();
+            }
+        }
+    }
+
+    public int BackgroundImageBlurAmount
+    {
+        get => _settings.BackgroundImageBlurAmount;
+        set
+        {
+            if (_settings.BackgroundImageBlurAmount != value)
+            {
+                _settings.BackgroundImageBlurAmount = value;
                 OnPropertyChanged();
                 Save();
             }

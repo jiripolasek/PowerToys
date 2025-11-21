@@ -65,9 +65,9 @@
                     </controls:SettingsCard>
 
                     <controls:SettingsExpander
-                        x:Uid="Settings_GeneralPage_BackgroundColor_SettingsExpander"
+                        x:Uid="Settings_GeneralPage_Background_SettingsExpander"
                         HeaderIcon="{ui:FontIcon Glyph=&#xE790;}"
-                        IsExpanded="True">
+                        IsExpanded="{x:Bind ViewModel.Appearance.IsColorizationDetailsExpanded, Mode=TwoWay}">
                         <controls:SettingsExpander.Content>
                             <ComboBox
                                 x:Uid="Settings_GeneralPage_ColorizationMode"
@@ -76,52 +76,82 @@
                                 <ComboBoxItem x:Uid="Settings_GeneralPage_ColorizationMode_None" />
                                 <ComboBoxItem x:Uid="Settings_GeneralPage_ColorizationMode_WindowsAccent" />
                                 <ComboBoxItem x:Uid="Settings_GeneralPage_ColorizationMode_CustomColor" />
+                                <ComboBoxItem x:Uid="Settings_GeneralPage_ColorizationMode_Image" />
                             </ComboBox>
                         </controls:SettingsExpander.Content>
                         <controls:SettingsExpander.Items>
-                            <controls:SettingsCard x:Uid="Settings_GeneralPage_BackgroundTint_SettingsCard">
-                                <ptControls:ColorPickerButton
-                                    HasSelectedColor="{x:Bind ViewModel.Appearance.Colorize, Mode=TwoWay}"
-                                    IsAlphaEnabled="False"
-                                    PaletteColors="{x:Bind ViewModel.Appearance.Swatches}"
-                                    SelectedColor="{x:Bind ViewModel.Appearance.ThemeColor, Mode=TwoWay}" />
+                            <!-- none -->
+                            <controls:SettingsCard x:Uid="Settings_GeneralPage_NoBackground_SettingsCard" Visibility="{x:Bind ViewModel.Appearance.IsNoBackgroundVisible, Mode=OneWay}" ContentAlignment="Vertical" HorizontalAlignment="Stretch">
+                                <TextBlock x:Uid="Settings_GeneralPage_NoBackground_DescriptionTextBlock" TextWrapping="WrapWholeWords" TextAlignment="Center" HorizontalAlignment="Center" HorizontalTextAlignment="Center" />
                             </controls:SettingsCard>
-                            <controls:SettingsCard x:Uid="Settings_GeneralPage_BackgroundTintIntensity_SettingsCard">
-                                <Slider
-                                    Maximum="100"
-                                    Minimum="1"
-                                    StepFrequency="1"
-                                    Value="{x:Bind ViewModel.Appearance.ColorIntensity, Mode=TwoWay}" />
-                            </controls:SettingsCard>
-                        </controls:SettingsExpander.Items>
-                    </controls:SettingsExpander>
 
-                    <controls:SettingsExpander
-                        x:Uid="Settings_GeneralPage_BackgroundImage_SettingsExpander"
-                        Description="{x:Bind ViewModel.Appearance.BackgroundImagePath, Mode=OneWay}"
-                        HeaderIcon="{ui:FontIcon Glyph=&#xE91B;}">
-                        <controls:SettingsExpander.Content>
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <Button x:Uid="Settings_GeneralPage_BackgroundImage_ChooseImageButton" Click="PickBackgroundImage_Click" />
-                                <Button
-                                    x:Uid="Settings_GeneralPage_BackgroundImage_ResetImageButton"
-                                    Command="{x:Bind ViewModel.Appearance.ResetBackgroundImageCommand}"
-                                    Visibility="{x:Bind helpers:BindTransformers.EmptyOrWhitespaceToCollapsed(ViewModel.Appearance.BackgroundImagePath), Mode=OneWay}" />
-                            </StackPanel>
-                        </controls:SettingsExpander.Content>
-                        <controls:SettingsExpander.Items>
-                            <controls:SettingsCard x:Uid="Settings_GeneralPage_BackgroundImageOpacity_SettingsCard">
+                            <!-- system accent color -->
+                            <controls:SettingsCard x:Uid="Settings_GeneralPage_WindowsAccentColor_SettingsCard" Visibility="{x:Bind ViewModel.Appearance.IsAccentColorControlsVisible, Mode=OneWay}">
+                                <controls:SettingsCard.Description>
+                                    <TextBlock>
+                                        <Span>
+                                            <Run>You can change system accent in Windows Settings: </Run>
+                                            <Hyperlink Click="OpenWindowsColorsSettings_Click" TextDecorations="None" UnderlineStyle="None">
+                                                <Run x:Uid="Settings_GeneralPage_WindowsAccentColor_OpenWindowsColorsLinkText" />
+                                            </Hyperlink>
+                                        </Span>
+                                    </TextBlock>
+                                </controls:SettingsCard.Description>
+                                <controls:SettingsCard.Content>
+                                    <Border Background="{x:Bind ViewModel.Appearance.ThemeColorBrush, Mode=OneWay}" MinHeight="32" MinWidth="32" CornerRadius="{ThemeResource ControlCornerRadius}" />
+                                </controls:SettingsCard.Content>
+                            </controls:SettingsCard>
+
+                            <!-- background -->
+                            <controls:SettingsCard x:Uid="Settings_GeneralPage_BackgroundImage_SettingsCard" 
+                                                   Description="{x:Bind ViewModel.Appearance.BackgroundImagePath, Mode=OneWay}"
+                                                   Visibility="{x:Bind ViewModel.Appearance.IsBackgroundControlsVisible, Mode=OneWay}">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <Button x:Uid="Settings_GeneralPage_BackgroundImage_ChooseImageButton" Click="PickBackgroundImage_Click" />
+                                </StackPanel>
+                            </controls:SettingsCard>
+                            <controls:SettingsCard x:Uid="Settings_GeneralPage_BackgroundImageOpacity_SettingsCard" Visibility="{x:Bind ViewModel.Appearance.IsBackgroundControlsVisible, Mode=OneWay}">
                                 <Slider
                                     Maximum="100"
                                     Minimum="1"
                                     StepFrequency="1"
                                     Value="{x:Bind ViewModel.Appearance.BackgroundImageOpacity, Mode=TwoWay}" />
                             </controls:SettingsCard>
-                            <controls:SettingsCard x:Uid="Settings_GeneralPage_BackgroundImageFit_SettingsCard">
+                            <controls:SettingsCard x:Uid="Settings_GeneralPage_BackgroundImageBrightness_SettingsCard" Visibility="{x:Bind ViewModel.Appearance.IsBackgroundControlsVisible, Mode=OneWay}">
+                                <Slider
+                                    Maximum="100"
+                                    Minimum="-100"
+                                    StepFrequency="1"
+                                    Value="{x:Bind ViewModel.Appearance.BackgroundImageBrightness, Mode=TwoWay}" />
+                            </controls:SettingsCard>
+                            <controls:SettingsCard x:Uid="Settings_GeneralPage_BackgroundImageBlur_SettingsCard" Visibility="{x:Bind ViewModel.Appearance.IsBackgroundControlsVisible, Mode=OneWay}">
+                                <Slider
+                                        Maximum="50"
+                                        Minimum="0"
+                                        StepFrequency="1"
+                                        Value="{x:Bind ViewModel.Appearance.BackgroundImageBlurAmount, Mode=TwoWay}" />
+                            </controls:SettingsCard>
+                            <controls:SettingsCard x:Uid="Settings_GeneralPage_BackgroundImageFit_SettingsCard" Visibility="{x:Bind ViewModel.Appearance.IsBackgroundControlsVisible, Mode=OneWay}">
                                 <ComboBox SelectedIndex="{x:Bind ViewModel.Appearance.BackgroundImageFitIndex, Mode=TwoWay}">
                                     <ComboBoxItem x:Uid="BackgroundImageFit_ComboBoxItem_Fill" />
                                     <ComboBoxItem x:Uid="BackgroundImageFit_ComboBoxItem_Stretch" />
                                 </ComboBox>
+                            </controls:SettingsCard>
+
+                            <!-- Background tint color and intensity -->
+                            <controls:SettingsCard x:Uid="Settings_GeneralPage_BackgroundTint_SettingsCard" Visibility="{x:Bind ViewModel.Appearance.IsCustomTintVisible, Mode=OneWay}">
+                                <ptControls:ColorPickerButton
+                                    HasSelectedColor="True"
+                                    IsAlphaEnabled="False"
+                                    PaletteColors="{x:Bind ViewModel.Appearance.Swatches}"
+                                    SelectedColor="{x:Bind ViewModel.Appearance.ThemeColor, Mode=TwoWay}" />
+                            </controls:SettingsCard>
+                            <controls:SettingsCard x:Uid="Settings_GeneralPage_BackgroundTintIntensity_SettingsCard" Visibility="{x:Bind ViewModel.Appearance.IsCustomTintVisible, Mode=OneWay}">
+                                <Slider
+                                    Maximum="100"
+                                    Minimum="1"
+                                    StepFrequency="1"
+                                    Value="{x:Bind ViewModel.Appearance.ColorIntensity, Mode=TwoWay}" />
                             </controls:SettingsCard>
                         </controls:SettingsExpander.Items>
                     </controls:SettingsExpander>
