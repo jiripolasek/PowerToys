@@ -160,8 +160,7 @@ public sealed partial class BlurImageControl : Control
     {
         if (d is BlurImageControl control && control._effectBrush != null)
         {
-            var value = Math.Clamp((double)e.NewValue, -1.0f, 1.0f);
-            control._effectBrush.Properties.InsertScalar("Brightness.Exposure", (float)value);
+            control.UpdateEffect();
         }
     }
 
