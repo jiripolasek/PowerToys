@@ -18,17 +18,7 @@ namespace Microsoft.CmdPal.UI.ViewModels;
 
 public sealed partial class AppearanceSettingsViewModel : ObservableObject, IDisposable
 {
-    private readonly SettingsModel _settings;
-    private readonly UISettings _uiSettings;
-    private readonly IThemeService _themeService;
-    private readonly DispatcherQueueTimer _saveTimer = DispatcherQueue.GetForCurrentThread().CreateTimer();
-    private readonly DispatcherQueue _uiDispatcher = DispatcherQueue.GetForCurrentThread();
-
-    private ElementTheme? _elementThemeOverride;
-    private Color _currentSystemAccentColor;
-
-    public ObservableCollection<Color> Swatches { get; } =
-    [
+    private static readonly ObservableCollection<Color> WindowsColorSwatches = [
 
         // row 0
         Color.FromArgb(255, 255, 185, 0), // #ffb900
@@ -95,6 +85,17 @@ public sealed partial class AppearanceSettingsViewModel : ObservableObject, IDis
         Color.FromArgb(255, 126, 115, 95), // #7e735f
     ];
 
+    private readonly SettingsModel _settings;
+    private readonly UISettings _uiSettings;
+    private readonly IThemeService _themeService;
+    private readonly DispatcherQueueTimer _saveTimer = DispatcherQueue.GetForCurrentThread().CreateTimer();
+    private readonly DispatcherQueue _uiDispatcher = DispatcherQueue.GetForCurrentThread();
+
+    private ElementTheme? _elementThemeOverride;
+    private Color _currentSystemAccentColor;
+
+    public ObservableCollection<Color> Swatches => WindowsColorSwatches;
+
     public int ThemeIndex
     {
         get => (int)_settings.Theme;
@@ -115,8 +116,6 @@ public sealed partial class AppearanceSettingsViewModel : ObservableObject, IDis
             }
         }
     }
-
-    public Brush ThemeColorBrush => new SolidColorBrush(ThemeColor);
 
     public ColorizationMode ColorizationMode
     {
@@ -146,22 +145,6 @@ public sealed partial class AppearanceSettingsViewModel : ObservableObject, IDis
         }
     }
 
-    public bool IsColorizationDetailsExpanded
-    {
-        get;
-        set => SetProperty(ref field, value);
-    }
-
-    public bool IsCustomTintVisible => _settings.ColorizationMode is ColorizationMode.CustomColor or ColorizationMode.Image;
-
-    public bool IsCustomTintIntensityVisible => _settings.ColorizationMode is ColorizationMode.CustomColor or ColorizationMode.WindowsAccentColor or ColorizationMode.Image;
-
-    public bool IsBackgroundControlsVisible => _settings.ColorizationMode is ColorizationMode.Image;
-
-    public bool IsNoBackgroundVisible => _settings.ColorizationMode is ColorizationMode.None;
-
-    public bool IsAccentColorControlsVisible => _settings.ColorizationMode is ColorizationMode.WindowsAccentColor;
-
     public int ColorizationModeIndex
     {
         get => (int)_settings.ColorizationMode;
@@ -175,15 +158,9 @@ public sealed partial class AppearanceSettingsViewModel : ObservableObject, IDis
         {
             if (_settings.CustomThemeColor != value)
             {
-                var currentSwatch = SelectedColorSwatch;
                 _settings.CustomThemeColor = value;
-                OnPropertyChanged();
-                OnPropertyChanged(nameof(ThemeColorBrush));
 
-                if (currentSwatch != SelectedColorSwatch)
-                {
-                    OnPropertyChanged(nameof(SelectedColorSwatch));
-                }
+                OnPropertyChanged();
 
                 if (ColorIntensity == 0)
                 {
@@ -191,18 +168,6 @@ public sealed partial class AppearanceSettingsViewModel : ObservableObject, IDis
                 }
 
                 Save();
-            }
-        }
-    }
-
-    public Color? SelectedColorSwatch
-    {
-        get => Swatches.FirstOrDefault(t => t == ThemeColor);
-        set
-        {
-            if (value != ThemeColor && value != null && value != default(Color))
-            {
-                ThemeColor = value ?? Colors.Black;
             }
         }
     }
@@ -227,7 +192,6 @@ public sealed partial class AppearanceSettingsViewModel : ObservableObject, IDis
             {
                 _settings.BackgroundImagePath = value;
                 OnPropertyChanged();
-                OnPropertyChanged(nameof(EffectiveBackgroundImageSource));
 
                 if (BackgroundImageOpacity == 0)
                 {
@@ -315,27 +279,41 @@ public sealed partial class AppearanceSettingsViewModel : ObservableObject, IDis
         };
     }
 
+    [ObservableProperty]
+    public partial bool IsColorizationDetailsExpanded { get; set; }
+
+    public bool IsCustomTintVisible => _settings.ColorizationMode is ColorizationMode.CustomColor or ColorizationMode.Image;
+
+    public bool IsCustomTintIntensityVisible => _settings.ColorizationMode is ColorizationMode.CustomColor or ColorizationMode.WindowsAccentColor or ColorizationMode.Image;
+
+    public bool IsBackgroundControlsVisible => _settings.ColorizationMode is ColorizationMode.Image;
+
+    public bool IsNoBackgroundVisible => _settings.ColorizationMode is ColorizationMode.None;
+
+    public bool IsAccentColorControlsVisible => _settings.ColorizationMode is ColorizationMode.WindowsAccentColor;
+
     public AcrylicBackdropParameters EffectiveBackdrop { get; private set; } = new(Colors.Black, Colors.Black, 0.5f, 0.5f);
 
     public ElementTheme EffectiveTheme => _elementThemeOverride ?? _themeService.Current.Theme;
 
-    public ImageSource? EffectiveBackgroundImageSource
+    public Color EffectiveThemeColor => ColorizationMode switch
     {
-        get
-        {
-            try
-            {
-                return !string.IsNullOrWhiteSpace(BackgroundImagePath) && Uri.TryCreate(BackgroundImagePath, UriKind.RelativeOrAbsolute, out var uri)
-                    ? new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(uri)
-                    : null;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex);
-                throw;
-            }
-        }
-    }
+        ColorizationMode.WindowsAccentColor => _currentSystemAccentColor,
+        ColorizationMode.CustomColor or ColorizationMode.Image => ThemeColor,
+        _ => Colors.Transparent,
+    };
+
+    // Since the blur amount is absolute, we need to scale it down for the preview (which is smaller than full screen).
+    public int EffectiveBackgroundImageBlurAmount => (int)Math.Round(BackgroundImageBlurAmount / 4f);
+
+    public double EffectiveBackgroundImageBrightness => BackgroundImageBrightness / 100.0;
+
+    public ImageSource? EffectiveBackgroundImageSource =>
+        ColorizationMode is ColorizationMode.Image
+        && !string.IsNullOrWhiteSpace(BackgroundImagePath)
+        && Uri.TryCreate(BackgroundImagePath, UriKind.RelativeOrAbsolute, out var uri)
+            ? new Microsoft.UI.Xaml.Media.Imaging.BitmapImage(uri)
+            : null;
 
     public AppearanceSettingsViewModel(IThemeService themeService, SettingsModel settings)
     {
@@ -345,38 +323,33 @@ public sealed partial class AppearanceSettingsViewModel : ObservableObject, IDis
 
         _uiSettings = new UISettings();
         _uiSettings.ColorValuesChanged += UiSettingsOnColorValuesChanged;
-        _currentSystemAccentColor = _uiSettings.GetColorValue(UIColorType.Accent);
+        UpdateAccentColor(_uiSettings);
 
         Reapply();
+
+        IsColorizationDetailsExpanded = _settings.ColorizationMode != ColorizationMode.None;
     }
 
-    private void UiSettingsOnColorValuesChanged(UISettings sender, object args)
+    private void UiSettingsOnColorValuesChanged(UISettings sender, object args) => _uiDispatcher.TryEnqueue(() => UpdateAccentColor(sender));
+
+    private void UpdateAccentColor(UISettings sender)
     {
-        _uiDispatcher.TryEnqueue(() =>
+        _currentSystemAccentColor = sender.GetColorValue(UIColorType.Accent);
+        if (ColorizationMode == ColorizationMode.WindowsAccentColor)
         {
-            if (ColorizationMode == ColorizationMode.WindowsAccentColor)
-            {
-                _currentSystemAccentColor = sender.GetColorValue(UIColorType.Accent);
-                ThemeColor = _currentSystemAccentColor;
-                Reapply();
-            }
-        });
+            ThemeColor = _currentSystemAccentColor;
+        }
     }
 
     private void ThemeServiceOnThemeChanged(object? sender, ThemeChangedEventArgs e)
     {
-        Reapply();
+        _saveTimer.Debounce(Reapply, TimeSpan.FromMilliseconds(200));
     }
 
     private void Save()
     {
-        _saveTimer.Debounce(
-            () =>
-            {
-                SettingsModel.SaveSettings(_settings);
-                Reapply();
-            },
-            TimeSpan.FromMilliseconds(200));
+        SettingsModel.SaveSettings(_settings);
+        _saveTimer.Debounce(Reapply, TimeSpan.FromMilliseconds(200));
     }
 
     private void Reapply()
@@ -384,6 +357,10 @@ public sealed partial class AppearanceSettingsViewModel : ObservableObject, IDis
         // Theme services recalculates effective color and opacity based on current settings.
         EffectiveBackdrop = _themeService.Current.BackdropParameters;
         OnPropertyChanged(nameof(EffectiveBackdrop));
+        OnPropertyChanged(nameof(EffectiveBackgroundImageBrightness));
+        OnPropertyChanged(nameof(EffectiveBackgroundImageSource));
+        OnPropertyChanged(nameof(EffectiveThemeColor));
+        OnPropertyChanged(nameof(EffectiveBackgroundImageBlurAmount));
 
         // LOAD BEARING:
         // We need to cycle through the EffectiveTheme property to force reload of resources.
@@ -396,9 +373,13 @@ public sealed partial class AppearanceSettingsViewModel : ObservableObject, IDis
     }
 
     [RelayCommand]
-    private void ResetBackgroundImage()
+    private void ResetBackgroundImageProperties()
     {
-        BackgroundImagePath = string.Empty;
+        BackgroundImageBrightness = 0;
+        BackgroundImageBlurAmount = 0;
+        BackgroundImageFit = BackgroundImageFit.UniformToFill;
+        BackgroundImageOpacity = 100;
+        ColorIntensity = 0;
     }
 
     public void Dispose()

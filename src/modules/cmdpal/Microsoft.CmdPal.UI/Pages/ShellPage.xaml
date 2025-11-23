@@ -181,15 +181,16 @@
             Grid.RowSpan="2"
             HorizontalAlignment="Stretch"
             VerticalAlignment="Stretch"
+            BlurAmount="{x:Bind ViewModel.BackgroundImageBlurAmount, Mode=OneWay}"
+            ImageBrightness="{x:Bind ViewModel.BackgroundImageBrightness, Mode=OneWay}"
             ImageOpacity="{x:Bind ViewModel.BackgroundImageOpacity, Mode=OneWay}"
             ImageSource="{x:Bind ViewModel.BackgroundImageSource, Mode=OneWay}"
             ImageStretch="{x:Bind ViewModel.BackgroundImageStretch, Mode=OneWay}"
-            ImageBrightness="{x:Bind ViewModel.BackgroundImageBrightness, Mode=OneWay}"
-            BlurAmount="{x:Bind ViewModel.BackgroundImageBlurAmount, Mode=OneWay}"
+            IsHitTestVisible="False"
+            IsHoldingEnabled="False"
             TintColor="{x:Bind ViewModel.BackgroundImageTint, Mode=OneWay}"
             TintIntensity="{x:Bind ViewModel.BackgroundImageTintIntensity, Mode=OneWay}"
-            Visibility="{x:Bind ViewModel.ShowBackgroundImage, Mode=OneWay}"
-            />
+            Visibility="{x:Bind ViewModel.ShowBackgroundImage, Mode=OneWay}" />
 
         <Grid Grid.Row="0" Background="{ThemeResource LayerOnAcrylicPrimaryBackgroundBrush}">
             <Grid.RowDefinitions>

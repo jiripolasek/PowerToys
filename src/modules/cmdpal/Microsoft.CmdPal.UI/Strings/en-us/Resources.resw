@@ -640,4 +640,13 @@ Right-click to remove the key combination, thereby deactivating the shortcut.</v
   <data name="Settings_GeneralPage_BackgroundImageBrightness_SettingsCard.Header" xml:space="preserve">
     <value>Background image brightness</value>
   </data>
+  <data name="Settings_GeneralPage_BackgroundImage_ResetProperties_SettingsCard.Header" xml:space="preserve">
+    <value>Restore defaults</value>
+  </data>
+  <data name="Settings_GeneralPage_Background_ResetImagePropertiesButton.Content" xml:space="preserve">
+    <value>Reset</value>
+  </data>
+  <data name="Settings_GeneralPage_WindowsAccentColor_SettingsCard_Description1.Text" xml:space="preserve">
+    <value>You can change system accent in Windows Settings:</value>
+  </data>
 </root>

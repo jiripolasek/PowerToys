@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for more information.
 
 using System.Numerics;
+using ManagedCommon;
 using Microsoft.Graphics.Canvas.Effects;
 using Microsoft.UI;
 using Microsoft.UI.Composition;
@@ -10,31 +11,42 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Hosting;
 using Microsoft.UI.Xaml.Media;
-using Windows.Graphics.Effects;
 using Windows.UI;
 
 namespace Microsoft.CmdPal.UI.Controls;
 
-public sealed partial class BlurImageControl : Control
+internal sealed partial class BlurImageControl : Control
 {
-    private Compositor? _compositor;
-    private SpriteVisual? _effectVisual;
-    private CompositionEffectBrush? _effectBrush;
-    private CompositionSurfaceBrush? _imageBrush;
+    private const string ImageSourceParameterName = "ImageSource";
 
-    public BlurImageControl()
-    {
-        this.DefaultStyleKey = typeof(BlurImageControl);
-        this.Loaded += OnLoaded;
-        this.SizeChanged += OnSizeChanged;
-    }
+    private const string BrightnessEffectName = "Brightness";
+    private const string BrightnessOverlayEffectName = "BrightnessOverlay";
+    private const string BlurEffectName = "Blur";
+    private const string TintBlendEffectName = "TintBlend";
+    private const string TintEffectName = "Tint";
+
+#pragma warning disable CA1507 // Use nameof to express symbol names ... some of these refer to effect properties that are separate from the class properties
+    private static readonly string BrightnessSource1AmountEffectProperty = GetPropertyName(BrightnessEffectName, "Source1Amount");
+    private static readonly string BrightnessSource2AmountEffectProperty = GetPropertyName(BrightnessEffectName, "Source2Amount");
+    private static readonly string BrightnessOverlayColorEffectProperty = GetPropertyName(BrightnessOverlayEffectName, "Color");
+    private static readonly string BlurBlurAmountEffectProperty = GetPropertyName(BlurEffectName, "BlurAmount");
+    private static readonly string TintColorEffectProperty = GetPropertyName(TintEffectName, "Color");
+#pragma warning restore CA1507
+
+    private static readonly string[] AnimatableProperties = [
+        BrightnessSource1AmountEffectProperty,
+        BrightnessSource2AmountEffectProperty,
+        BrightnessOverlayColorEffectProperty,
+        BlurBlurAmountEffectProperty,
+        TintColorEffectProperty
+    ];
 
     public static readonly DependencyProperty ImageSourceProperty =
         DependencyProperty.Register(
             nameof(ImageSource),
             typeof(ImageSource),
             typeof(BlurImageControl),
-            new PropertyMetadata(null, OnVisualPropertyChanged));
+            new PropertyMetadata(null, OnImageChanged));
 
     public static readonly DependencyProperty ImageStretchProperty =
         DependencyProperty.Register(
@@ -78,9 +90,17 @@ public sealed partial class BlurImageControl : Control
             typeof(BlurImageControl),
             new PropertyMetadata(0.0, OnVisualPropertyChanged));
 
-    private static readonly IEnumerable<string> AnimatableProperties = [
-        "Blur.BlurAmount"
-    ];
+    private Compositor? _compositor;
+    private SpriteVisual? _effectVisual;
+    private CompositionEffectBrush? _effectBrush;
+    private CompositionSurfaceBrush? _imageBrush;
+
+    public BlurImageControl()
+    {
+        this.DefaultStyleKey = typeof(BlurImageControl);
+        this.Loaded += OnLoaded;
+        this.SizeChanged += OnSizeChanged;
+    }
 
     public ImageSource ImageSource
     {
@@ -152,7 +172,7 @@ public sealed partial class BlurImageControl : Control
     {
         if (d is BlurImageControl control && control._effectBrush != null)
         {
-            control._effectBrush.Properties.InsertScalar("Blur.BlurAmount", (float)(double)e.NewValue);
+            control.UpdateEffect();
         }
     }
 
@@ -179,6 +199,17 @@ public sealed partial class BlurImageControl : Control
         }
     }
 
+    private static void OnImageChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not BlurImageControl control)
+        {
+            return;
+        }
+
+        control.EnsureEffect(force: true);
+        control.UpdateEffect();
+    }
+
     private void InitializeComposition()
     {
         var visual = ElementCompositionPreview.GetElementVisual(this);
@@ -195,90 +226,142 @@ public sealed partial class BlurImageControl : Control
         UpdateEffect();
     }
 
-    private void UpdateEffect()
+    private void EnsureEffect(bool force = false)
     {
-        if (_compositor == null)
+        if (_compositor is null)
         {
             return;
         }
 
-        // Build effect graph
-        var brightnessFactor = (float)Math.Clamp(ImageBrightness + 1.0f, 0.0f, 2.0f);
-
-        var brightnessMatrix = new Matrix5x4
+        if (_effectBrush is not null && !force)
         {
-            // Scale R, G, B by brightnessFactor, leave alpha and offsets unchanged
-            M11 = brightnessFactor,
-            M22 = brightnessFactor,
-            M33 = brightnessFactor,
-            M44 = 1.0f,
+            return;
+        }
+
+        var imageSource = new CompositionEffectSourceParameter(ImageSourceParameterName);
+
+        // 1) Brightness via ArithmeticCompositeEffect
+        // We blend between the original image and either black or white,
+        // depending on whether we want to darken or brighten. BrightnessEffect isn't supported
+        // in the composition graph.
+        var brightnessEffect = new ArithmeticCompositeEffect
+        {
+            Name = BrightnessEffectName,
+            Source1 = imageSource, // original image
+            Source2 = new ColorSourceEffect
+            {
+                Name = BrightnessOverlayEffectName,
+                Color = Colors.Black, // we'll swap black/white via properties
+            },
+
+            MultiplyAmount = 0.0f,
+            Source1Amount = 1.0f, // original
+            Source2Amount = 0.0f, // overlay
+            Offset = 0.0f,
         };
 
-        // 1) Brightness
-        var brightnessEffect = new ColorMatrixEffect
-        {
-            Name = "Brightness",
-            ColorMatrix = brightnessMatrix,
-            Source = new CompositionEffectSourceParameter("ImageSource"),
-        };
-
+        // 2) Blur
         var blurEffect = new GaussianBlurEffect
         {
-            Name = "Blur",
-            BlurAmount = (float)BlurAmount,
+            Name = BlurEffectName,
+            BlurAmount = 0.0f,
             BorderMode = EffectBorderMode.Hard,
-            Optimization = EffectOptimization.Speed,
+            Optimization = EffectOptimization.Balanced,
             Source = brightnessEffect,
         };
 
-        IGraphicsEffect finalEffect = blurEffect;
-
-        // Add tint if intensity > 0
-        if (TintIntensity > 0)
+        // 3) Tint (always in the chain; intensity via alpha)
+        var tintEffect = new BlendEffect
         {
-            var tintColor = TintColor;
-            var adjustedColor = Color.FromArgb(
-                (byte)(TintIntensity * 255),
-                tintColor.R,
-                tintColor.G,
-                tintColor.B);
-
-            finalEffect = new BlendEffect
+            Name = TintBlendEffectName,
+            Background = blurEffect,
+            Foreground = new ColorSourceEffect
             {
-                Background = finalEffect,
-                Foreground = new ColorSourceEffect
-                {
-                    Name = "Tint",
-                    Color = adjustedColor,
-                },
-                Mode = BlendEffectMode.Multiply,
-            };
-        }
+                Name = TintEffectName,
+                Color = Colors.Transparent,
+            },
+            Mode = BlendEffectMode.Multiply,
+        };
 
-        var effectFactory = _compositor.CreateEffectFactory(finalEffect, AnimatableProperties);
+        var effectFactory = _compositor.CreateEffectFactory(tintEffect, AnimatableProperties);
+
         _effectBrush?.Dispose();
         _effectBrush = effectFactory.CreateBrush();
 
-        // Set image source
-        if (ImageSource != null)
+        // Set initial source
+        if (ImageSource is not null)
         {
-            // Load image into composition surface
-            _imageBrush = _compositor.CreateSurfaceBrush();
+            _imageBrush ??= _compositor.CreateSurfaceBrush();
             LoadImageAsync(ImageSource);
-            _effectBrush.SetSourceParameter("ImageSource", _imageBrush);
+            _effectBrush.SetSourceParameter(ImageSourceParameterName, _imageBrush);
         }
         else
         {
-            // Use backdrop if no image source
-            _effectBrush.SetSourceParameter("ImageSource", _compositor.CreateBackdropBrush());
+            _effectBrush.SetSourceParameter(ImageSourceParameterName, _compositor.CreateBackdropBrush());
         }
 
-        _effectBrush.Properties.InsertScalar("Blur.BlurAmount", (float)BlurAmount);
-
-        if (_effectVisual != null)
+        if (_effectVisual is not null)
         {
             _effectVisual.Brush = _effectBrush;
         }
+    }
+
+    private void UpdateEffect()
+    {
+        if (_compositor is null)
+        {
+            return;
+        }
+
+        EnsureEffect();
+        if (_effectBrush is null)
+        {
+            return;
+        }
+
+        var props = _effectBrush.Properties;
+
+        // Brightness
+        var b = (float)Math.Clamp(ImageBrightness, -1.0, 1.0);
+
+        float source1Amount;
+        float source2Amount;
+        Color overlayColor;
+
+        if (b >= 0)
+        {
+            // Brighten: blend towards white
+            overlayColor = Colors.White;
+            source1Amount = 1.0f - b; // original image contribution
+            source2Amount = b;        // white overlay contribution
+        }
+        else
+        {
+            // Darken: blend towards black
+            overlayColor = Colors.Black;
+            var t = -b;               // 0..1
+            source1Amount = 1.0f - t; // original image
+            source2Amount = t;        // black overlay
+        }
+
+        props.InsertScalar(BrightnessSource1AmountEffectProperty, source1Amount);
+        props.InsertScalar(BrightnessSource2AmountEffectProperty, source2Amount);
+        props.InsertColor(BrightnessOverlayColorEffectProperty, overlayColor);
+
+        // Blur
+        props.InsertScalar(BlurBlurAmountEffectProperty, (float)BlurAmount);
+
+        // Tint
+        var tintColor = TintColor;
+        var clampedIntensity = (float)Math.Clamp(TintIntensity, 0.0, 1.0);
+
+        var adjustedColor = Color.FromArgb(
+            (byte)(clampedIntensity * 255),
+            tintColor.R,
+            tintColor.G,
+            tintColor.B);
+
+        props.InsertColor(TintColorEffectProperty, adjustedColor);
     }
 
     private void LoadImageAsync(ImageSource imageSource)
@@ -287,20 +370,29 @@ public sealed partial class BlurImageControl : Control
         {
             if (imageSource is Microsoft.UI.Xaml.Media.Imaging.BitmapImage bitmapImage)
             {
-                var loadedSurface = Microsoft.UI.Xaml.Media.LoadedImageSurface.StartLoadFromUri(bitmapImage.UriSource);
-                loadedSurface.LoadCompleted += (sender, args) =>
+                _imageBrush ??= _compositor?.CreateSurfaceBrush();
+                if (_imageBrush is null)
+                {
+                    return;
+                }
+
+                var loadedSurface = LoadedImageSurface.StartLoadFromUri(bitmapImage.UriSource);
+                loadedSurface.LoadCompleted += (_, _) =>
                 {
                     if (_imageBrush is not null)
                     {
                         _imageBrush.Surface = loadedSurface;
-                        _imageBrush.Stretch = CompositionStretch.UniformToFill;
+                        _imageBrush.Stretch = ConvertStretch(ImageStretch);
+                        _imageBrush.BitmapInterpolationMode = CompositionBitmapInterpolationMode.Linear;
                     }
                 };
+
+                _effectBrush?.SetSourceParameter(ImageSourceParameterName, _imageBrush);
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Handle loading errors
+            Logger.LogError("Failed to load image for BlurImageControl: {0}", ex);
         }
     }
 
@@ -315,4 +407,6 @@ public sealed partial class BlurImageControl : Control
             _ => CompositionStretch.UniformToFill,
         };
     }
+
+    private static string GetPropertyName(string effectName, string propertyName) => $"{effectName}.{propertyName}";
 }
