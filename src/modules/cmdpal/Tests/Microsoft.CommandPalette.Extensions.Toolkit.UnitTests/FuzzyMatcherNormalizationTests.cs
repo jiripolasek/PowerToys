@@ -49,8 +49,8 @@ public sealed class FuzzyMatcherNormalizationTests
     [TestMethod]
     public void Normalization_ShouldBeLengthPreserving_MixedComposed()
     {
-        // "Ångström" -> A + ring, o + umlaut
-        var input = "Ångström";
+        // "Ångström" -> A + ring, o + umlaut /* #no-spell-check-line */
+        var input = "Ångström"; /* #no-spell-check-line */
         var expected = "ANGSTROM";
 
         var normalized = Fold(input, removeDiacritics: true);
