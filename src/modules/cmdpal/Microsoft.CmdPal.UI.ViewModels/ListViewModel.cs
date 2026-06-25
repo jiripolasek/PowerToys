@@ -1113,6 +1113,9 @@ public partial class ListViewModel : PageViewModel, IDisposable
     public void Dispose()
     {
         GC.SuppressFinalize(this);
+
+        // We should run SafeCleanup here, right? But that causes some issues...
+        // SafeCleanup();
         CancelAndDisposeTokenSource(ref _cancellationTokenSource);
         CancelAndDisposeTokenSource(ref filterCancellationTokenSource);
         CancelAndDisposeTokenSource(ref _fetchItemsCancellationTokenSource);

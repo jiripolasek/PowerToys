@@ -27,7 +27,13 @@ public partial class ContentPageViewModel : PageViewModel, ICommandBarContext
 
     public bool HasCommands => _snapshot.PrimaryCommand is not null;
 
-    public DetailsViewModel? Details { get; private set; }
+    private OwnedRef<DetailsViewModel> _detailsRef;
+
+    public DetailsViewModel? Details
+    {
+        get => _detailsRef.Value;
+        private set => _detailsRef.Set(value);
+    }
 
     [MemberNotNullWhen(true, nameof(Details))]
     public bool HasDetails => Details is not null;
@@ -89,7 +95,11 @@ public partial class ContentPageViewModel : PageViewModel, ICommandBarContext
         DoOnUiThread(
         () =>
         {
-            ListHelpers.InPlaceUpdateList(Content, newContent);
+            ListHelpers.InPlaceUpdateList(Content, newContent, out var removedContent);
+            foreach (var removedItem in removedContent)
+            {
+                removedItem.SafeCleanup();
+            }
         });
     }
 
@@ -199,6 +209,7 @@ public partial class ContentPageViewModel : PageViewModel, ICommandBarContext
             case nameof(Details):
                 var extensionDetails = model.Details;
                 Details = extensionDetails is not null ? new(extensionDetails, PageContext) : null;
+                Details?.InitializeProperties();
                 UpdateDetails();
                 break;
         }
@@ -312,11 +323,17 @@ public partial class ContentPageViewModel : PageViewModel, ICommandBarContext
         }
     }
 
+    protected override void AssertOwnedRefsClearedAfterCleanup()
+    {
+        base.AssertOwnedRefsClearedAfterCleanup();
+        System.Diagnostics.Debug.Assert(_detailsRef.Value is null, nameof(_detailsRef));
+    }
+
     protected override void UnsafeCleanup()
     {
         base.UnsafeCleanup();
 
-        Details?.SafeCleanup();
+        Details = null;
 
         List<IContextItemViewModel> removedItems;
         lock (_commandsLock)

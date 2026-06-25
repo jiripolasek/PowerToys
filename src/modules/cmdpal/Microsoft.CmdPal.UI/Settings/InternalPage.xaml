@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8" ?>
+<?xml version="1.0" encoding="utf-8" ?>
 <Page
     x:Class="Microsoft.CmdPal.UI.Settings.InternalPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -94,6 +94,16 @@
                             Toggled="ShowHwndFrameToggle_Toggled" />
                     </controls:SettingsCard>
 
+                    <controls:SettingsCard
+                        x:Name="ForceGcSettingsCard"
+                        Description="Runs GC.Collect(), waits for finalizers, then collects again."
+                        Header="Force garbage collection"
+                        HeaderIcon="{ui:FontIcon Glyph=&#xE9CE;}">
+                        <Button
+                            AutomationProperties.AutomationId="CmdPal_InternalPage_ForceGc"
+                            Click="ForceGcClicked"
+                            Content="Run GC" />
+                    </controls:SettingsCard>
                     <!--  Gallery Section  -->
                     <TextBlock Style="{StaticResource SettingsSectionHeaderTextBlockStyle}" Text="Extension Gallery" />
                     <controls:SettingsCard

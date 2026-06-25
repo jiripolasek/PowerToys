@@ -118,6 +118,18 @@ public sealed partial class InternalPage : Page
         }
     }
 
+    private async void ForceGcClicked(object sender, RoutedEventArgs e)
+    {
+        await Task.Run(() =>
+        {
+            Logger.LogInfo("Manual GC requested from Internal page.");
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            Logger.LogInfo("Manual GC completed.");
+        });
+    }
+
     private void ToggleDevRibbonClicked(object sender, RoutedEventArgs e)
     {
         WeakReferenceMessenger.Default.Send(new ToggleDevRibbonMessage());

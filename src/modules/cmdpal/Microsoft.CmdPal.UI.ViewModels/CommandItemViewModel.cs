@@ -67,7 +67,13 @@ public partial class CommandItemViewModel : ExtensionObjectViewModel, ICommandBa
 
     public IconInfoViewModel Icon => _icon.IsSet ? _icon : Command.Icon;
 
-    public CommandViewModel Command { get; private set; }
+    private OwnedRef<CommandViewModel> _commandRef;
+
+    public CommandViewModel Command
+    {
+        get => _commandRef.Value!;
+        private set => _commandRef.Set(value);
+    }
 
     // Reuse a cached read-only snapshot so repeated reads don't allocate.
     public IReadOnlyList<IContextItemViewModel> MoreCommands => _moreCommandsSnapshot;
@@ -123,6 +129,7 @@ public partial class CommandItemViewModel : ExtensionObjectViewModel, ICommandBa
     {
         _commandItemModel = item;
         _contextMenuFactory = contextMenuFactory;
+        _commandRef = new(propertyChangedHandler: Command_PropertyChanged);
         Command = new(null, errorContext);
     }
 
@@ -182,7 +189,6 @@ public partial class CommandItemViewModel : ExtensionObjectViewModel, ICommandBa
 
         // TODO: Do these need to go into FastInit?
         model.PropChanged += Model_PropChanged;
-        Command.PropertyChanged += Command_PropertyChanged;
 
         UpdateProperty(nameof(Name));
         UpdateProperty(nameof(Title));
@@ -324,11 +330,9 @@ public partial class CommandItemViewModel : ExtensionObjectViewModel, ICommandBa
         switch (propertyName)
         {
             case nameof(Command):
-                Command.PropertyChanged -= Command_PropertyChanged;
                 var command = model.Command;
                 Command = new(command, PageContext);
                 Command.InitializeProperties();
-                Command.PropertyChanged += Command_PropertyChanged;
 
                 // Extensions based on Command Palette SDK < 0.3 CommandItem class won't notify when Title changes because Command
                 // or Command.Name change. This is a workaround to ensure that the Title is always up-to-date for extensions with old SDK.
@@ -560,6 +564,12 @@ public partial class CommandItemViewModel : ExtensionObjectViewModel, ICommandBa
         }
     }
 
+    protected override void AssertOwnedRefsClearedAfterCleanup()
+    {
+        base.AssertOwnedRefsClearedAfterCleanup();
+        System.Diagnostics.Debug.Assert(_commandRef.Value is null, nameof(_commandRef));
+    }
+
     protected override void UnsafeCleanup()
     {
         base.UnsafeCleanup();
@@ -588,8 +598,7 @@ public partial class CommandItemViewModel : ExtensionObjectViewModel, ICommandBa
         // _listItemIcon.SafeCleanup();
         _icon = new(null); // necessary?
 
-        Command.PropertyChanged -= Command_PropertyChanged;
-        Command.SafeCleanup();
+        _commandRef.Clear();
 
         var model = _commandItemModel.Unsafe;
         if (model is not null)

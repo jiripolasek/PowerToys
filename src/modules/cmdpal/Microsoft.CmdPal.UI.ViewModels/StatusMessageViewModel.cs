@@ -15,7 +15,13 @@ public partial class StatusMessageViewModel : ExtensionObjectViewModel
 
     public MessageState State { get; private set; } = MessageState.Info;
 
-    public ProgressViewModel? Progress { get; private set; }
+    private OwnedRef<ProgressViewModel> _progressRef;
+
+    public ProgressViewModel? Progress
+    {
+        get => _progressRef.Value;
+        private set => _progressRef.Set(value);
+    }
 
     public bool HasProgress => Progress is not null;
 
@@ -91,5 +97,23 @@ public partial class StatusMessageViewModel : ExtensionObjectViewModel
         }
 
         UpdateProperty(propertyName);
+    }
+
+    protected override void AssertOwnedRefsClearedAfterCleanup()
+    {
+        base.AssertOwnedRefsClearedAfterCleanup();
+        System.Diagnostics.Debug.Assert(_progressRef.Value is null, nameof(_progressRef));
+    }
+
+    protected override void UnsafeCleanup()
+    {
+        base.UnsafeCleanup();
+        Progress = null;
+
+        var model = Model.Unsafe;
+        if (model is not null)
+        {
+            model.PropChanged -= Model_PropChanged;
+        }
     }
 }

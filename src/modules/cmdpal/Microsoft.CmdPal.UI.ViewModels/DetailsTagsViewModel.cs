@@ -39,4 +39,15 @@ public partial class DetailsTagsViewModel(
         UpdateProperty(nameof(HasTags));
         UpdateProperty(nameof(Tags));
     }
+
+    protected override void UnsafeCleanup()
+    {
+        base.UnsafeCleanup();
+        foreach (var tag in Tags)
+        {
+            tag.SafeCleanup();
+        }
+
+        Tags = [];
+    }
 }

@@ -78,4 +78,15 @@ public partial class DetailsViewModel(IDetails _details, WeakReference<IPageCont
             }
         }
     }
+
+    protected override void UnsafeCleanup()
+    {
+        base.UnsafeCleanup();
+        foreach (var item in Metadata)
+        {
+            item.SafeCleanup();
+        }
+
+        Metadata.Clear();
+    }
 }

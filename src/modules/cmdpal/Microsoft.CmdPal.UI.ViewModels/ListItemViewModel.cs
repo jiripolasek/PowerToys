@@ -34,7 +34,13 @@ public partial class ListItemViewModel : CommandItemViewModel
 
     public bool IsInteractive => Type == ListItemType.Item;
 
-    public DetailsViewModel? Details { get; private set; }
+    private OwnedRef<DetailsViewModel> _detailsRef;
+
+    public DetailsViewModel? Details
+    {
+        get => _detailsRef.Value;
+        private set => _detailsRef.Set(value);
+    }
 
     [MemberNotNullWhen(true, nameof(Details))]
     public bool HasDetails => Details is not null;
@@ -284,8 +290,10 @@ public partial class ListItemViewModel : CommandItemViewModel
             {
                 // Tags being an ObservableCollection instead of a List lead to
                 // many COM exception issues.
+                var oldTags = Tags;
                 Tags = [.. newTags];
                 UpdateVisibleTags();
+                oldTags?.ForEach(t => t.SafeCleanup());
 
                 // We're already in UI thread, so just raise the events
                 OnPropertyChanged(nameof(Tags));
@@ -344,6 +352,12 @@ public partial class ListItemViewModel : CommandItemViewModel
         }
     }
 
+    protected override void AssertOwnedRefsClearedAfterCleanup()
+    {
+        base.AssertOwnedRefsClearedAfterCleanup();
+        System.Diagnostics.Debug.Assert(_detailsRef.Value is null, nameof(_detailsRef));
+    }
+
     protected override void UnsafeCleanup()
     {
         base.UnsafeCleanup();
@@ -351,7 +365,7 @@ public partial class ListItemViewModel : CommandItemViewModel
         // Tags don't have event handlers or anything to cleanup
         Tags?.ForEach(t => t.SafeCleanup());
         _overflowTag?.SafeCleanup();
-        Details?.SafeCleanup();
+        Details = null;
 
         var model = Model.Unsafe;
         if (model is not null)

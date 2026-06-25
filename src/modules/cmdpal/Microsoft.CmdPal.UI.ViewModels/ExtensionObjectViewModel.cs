@@ -5,6 +5,7 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Microsoft.CmdPal.Common;
@@ -23,6 +24,13 @@ public abstract partial class ExtensionObjectViewModel : ObservableObject, IBatc
     private readonly ConcurrentQueue<string> _pendingProps = [];
 
     private readonly TaskScheduler _uiScheduler;
+
+#if DEBUG || CMDPAL_FF_VM_CLEANUP_FINALIZER_DIAGNOSTICS
+    private readonly int _allocationThreadId = Environment.CurrentManagedThreadId;
+    private readonly string _allocationStack = new StackTrace(skipFrames: 1, fNeedFileInfo: true).ToString();
+#endif
+
+    private int _safeCleanupCompleted;
 
     private InterlockedBoolean _batchQueued;
 
@@ -91,6 +99,25 @@ public abstract partial class ExtensionObjectViewModel : ObservableObject, IBatc
             CoreLogger.LogDebug($"ExtensionObjectViewModel created with TaskScheduler.Default. Type: {GetType().FullName}");
         }
     }
+
+#if DEBUG || CMDPAL_FF_VM_CLEANUP_FINALIZER_DIAGNOSTICS
+    ~ExtensionObjectViewModel()
+    {
+        try
+        {
+            if (Volatile.Read(ref _safeCleanupCompleted) == 0)
+            {
+                CoreLogger.LogWarning("ExtensionObjectViewModel finalized without SafeCleanup(). Type: " + GetType().FullName + "\\n" +
+                    "Allocation thread: " + _allocationThreadId + "\\n" +
+                    "Allocation stack:\\n" + _allocationStack);
+            }
+        }
+        catch (Exception ex)
+        {
+            CoreLogger.LogError("Failed to log missed SafeCleanup() diagnostic from finalizer.", ex);
+        }
+    }
+#endif
 
     public virtual Task InitializePropertiesAsync()
         => Task.Run(SafeInitializePropertiesSynchronous);
@@ -271,11 +298,27 @@ public abstract partial class ExtensionObjectViewModel : ObservableObject, IBatc
         // base doesn't do anything, but sub-classes should override this.
     }
 
+    protected virtual void AssertOwnedRefsClearedAfterCleanup()
+    {
+    }
+
     public virtual void SafeCleanup()
     {
+        if (Volatile.Read(ref _safeCleanupCompleted) != 0)
+        {
+            return;
+        }
+
         try
         {
             UnsafeCleanup();
+#if DEBUG || CMDPAL_FF_VM_CLEANUP_FINALIZER_DIAGNOSTICS
+            AssertOwnedRefsClearedAfterCleanup();
+#endif
+            Volatile.Write(ref _safeCleanupCompleted, 1);
+#pragma warning disable CA1816 // Dispose methods should call SuppressFinalize
+            GC.SuppressFinalize(this);
+#pragma warning restore CA1816 // Dispose methods should call SuppressFinalize
         }
         catch (Exception ex)
         {

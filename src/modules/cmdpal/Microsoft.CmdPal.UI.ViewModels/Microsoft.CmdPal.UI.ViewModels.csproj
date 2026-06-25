@@ -19,6 +19,15 @@
     <CsWinRTAotOptimizerEnabled>true</CsWinRTAotOptimizerEnabled>
   </PropertyGroup>
 
+  <!-- Optional: enable VM cleanup finalizer diagnostics in non-Debug builds -->
+  <PropertyGroup>
+    <EnableCmdPalVmCleanupFinalizerDiagnostics>false</EnableCmdPalVmCleanupFinalizerDiagnostics>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(EnableCmdPalVmCleanupFinalizerDiagnostics)' == 'true'">
+    <DefineConstants>$(DefineConstants);CMDPAL_FF_VM_CLEANUP_FINALIZER_DIAGNOSTICS</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Common" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
