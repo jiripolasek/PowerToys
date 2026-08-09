@@ -4,7 +4,6 @@
 
 using CommunityToolkit.WinUI;
 using ManagedCommon;
-using Microsoft.Terminal.UI;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -69,14 +68,7 @@ internal sealed partial class IconLoaderService : IIconLoaderService
                 return false;
             }
 
-            var family = !string.IsNullOrEmpty(fontFamily)
-                ? fontFamily
-                : glyphKind switch
-                {
-                    FontIconGlyphKind.FluentSymbol => "Segoe Fluent Icons, Segoe MDL2 Assets",
-                    FontIconGlyphKind.Emoji => "Segoe UI Emoji, Segoe UI",
-                    _ => "Segoe UI",
-                };
+            var family = FontIconGlyphClassifier.GetFontFamily(glyphKind, fontFamily);
 
             var scaledSize = iconSize.IsEmpty
                 ? iconSize
@@ -193,25 +185,39 @@ internal sealed partial class IconLoaderService : IIconLoaderService
 
         if (!string.IsNullOrEmpty(iconString))
         {
-            var dispatcherEnqueuedAt = diagnostics?.BeginDispatcherWait() ?? 0;
-            return await _dispatcherQueue
-                .EnqueueAsync(
-                    () =>
-                    {
-                        var dispatcherStartedAt = diagnostics?.DispatcherStarted(dispatcherEnqueuedAt) ?? 0;
-                        try
+            var preparationStartedAt = diagnostics?.BeginBackgroundPreparation() ?? 0;
+            var targetSize = scaledSize.IsEmpty
+                ? DefaultIconSize
+                : (int)Math.Max(scaledSize.Width, scaledSize.Height);
+            var preparedIcon = IconPathConverter.Prepare(iconString, fontFamily, targetSize);
+            diagnostics?.CompleteBackgroundPreparation(preparationStartedAt);
+
+            try
+            {
+                var dispatcherEnqueuedAt = diagnostics?.BeginDispatcherWait() ?? 0;
+                return await _dispatcherQueue
+                    .EnqueueAsync(
+                        async () =>
                         {
-                            var result = GetStringIconSource(iconString, fontFamily, scaledSize);
-                            diagnostics?.SetResult(result);
-                            return result;
-                        }
-                        finally
-                        {
-                            diagnostics?.DispatcherCompleted(dispatcherStartedAt);
-                        }
-                    },
-                    LoadingPriorityOnDispatcher)
-                .ConfigureAwait(false);
+                            var dispatcherStartedAt = diagnostics?.DispatcherStarted(dispatcherEnqueuedAt) ?? 0;
+                            try
+                            {
+                                var result = await IconPathConverter.CreateIconSourceAsync(preparedIcon);
+                                diagnostics?.SetResult(result);
+                                return result;
+                            }
+                            finally
+                            {
+                                diagnostics?.DispatcherCompleted(dispatcherStartedAt);
+                            }
+                        },
+                        LoadingPriorityOnDispatcher)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                preparedIcon.Dispose();
+            }
         }
 
         if (streamRef != null)
@@ -274,13 +280,5 @@ internal sealed partial class IconLoaderService : IIconLoaderService
         {
             bitmap.DecodePixelHeight = (int)size.Height;
         }
-    }
-
-    private static IconSource? GetStringIconSource(string iconString, string? fontFamily, Size size)
-    {
-        var iconSize = size.IsEmpty
-            ? DefaultIconSize
-            : (int)Math.Max(size.Width, size.Height);
-        return IconPathConverter.IconSourceMUX(iconString, fontFamily, iconSize);
     }
 }
