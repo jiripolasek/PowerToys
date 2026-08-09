@@ -195,24 +195,54 @@ internal sealed partial class IconLoaderService : IIconLoaderService
             try
             {
                 var dispatcherEnqueuedAt = diagnostics?.BeginDispatcherWait() ?? 0;
-                return await _dispatcherQueue
-                    .EnqueueAsync(
-                        async () =>
-                        {
-                            var dispatcherStartedAt = diagnostics?.DispatcherStarted(dispatcherEnqueuedAt) ?? 0;
-                            try
-                            {
-                                var result = await IconPathConverter.CreateIconSourceAsync(preparedIcon);
-                                diagnostics?.SetResult(result);
-                                return result;
-                            }
-                            finally
-                            {
-                                diagnostics?.DispatcherCompleted(dispatcherStartedAt);
-                            }
-                        },
-                        LoadingPriorityOnDispatcher)
+
+                // Keep the dispatcher callback synchronous for glyph and URI sources.
+                // The returned ValueTask carries only binary transfer work beyond it.
+                var materialization = await _dispatcherQueue
+                    .EnqueueAsync(CreateIconSourceOnDispatcher, LoadingPriorityOnDispatcher)
                     .ConfigureAwait(false);
+                return await materialization.ConfigureAwait(false);
+
+                ValueTask<IconSource?> CreateIconSourceOnDispatcher()
+                {
+                    var dispatcherStartedAt = diagnostics?.DispatcherStarted(dispatcherEnqueuedAt) ?? 0;
+                    var completionOwnedByCallback = true;
+                    try
+                    {
+                        if (IconPathConverter.TryCreateIconSourceSynchronously(preparedIcon, out var result))
+                        {
+                            diagnostics?.SetResult(result);
+                            return ValueTask.FromResult<IconSource?>(result);
+                        }
+
+                        var materializationInner = CompleteAsynchronousMaterializationAsync(dispatcherStartedAt);
+
+                        // The asynchronous continuation now owns the single timing-completion notification.
+                        completionOwnedByCallback = false;
+                        return materializationInner;
+                    }
+                    finally
+                    {
+                        if (completionOwnedByCallback)
+                        {
+                            diagnostics?.DispatcherCompleted(dispatcherStartedAt);
+                        }
+                    }
+                }
+
+                async ValueTask<IconSource?> CompleteAsynchronousMaterializationAsync(long dispatcherStartedAt)
+                {
+                    try
+                    {
+                        var result = await IconPathConverter.CompleteIconSourceCreationAsync(preparedIcon);
+                        diagnostics?.SetResult(result);
+                        return result;
+                    }
+                    finally
+                    {
+                        diagnostics?.DispatcherCompleted(dispatcherStartedAt);
+                    }
+                }
             }
             finally
             {
