@@ -2,7 +2,6 @@
 // The Microsoft Corporation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
-using System.Threading.Channels;
 using CommunityToolkit.WinUI;
 using ManagedCommon;
 using Microsoft.Terminal.UI;
@@ -25,8 +24,7 @@ internal sealed partial class IconLoaderService : IIconLoaderService
 
     private static readonly int WorkerCount = Math.Clamp(Environment.ProcessorCount / 2, 1, MaxWorkerCount);
 
-    private readonly Channel<Func<Task>> _highPriorityQueue = Channel.CreateBounded<Func<Task>>(32);
-    private readonly Channel<Func<Task>> _lowPriorityQueue = Channel.CreateUnbounded<Func<Task>>();
+    private readonly IconLoadQueue _queue = new(WorkerCount);
     private readonly Task[] _workers;
     private readonly DispatcherQueue _dispatcherQueue;
 
@@ -39,6 +37,12 @@ internal sealed partial class IconLoaderService : IIconLoaderService
         {
             _workers[i] = Task.Run(ProcessQueueAsync);
         }
+
+        _ = _queue.Completion.ContinueWith(
+            static task => Logger.LogError("Icon load scheduler failed", task.Exception!),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     public bool TryLoadGlyph(
@@ -106,26 +110,20 @@ internal sealed partial class IconLoaderService : IIconLoaderService
         double scale,
         TaskCompletionSource<IconSource?> tcs,
         IconLoadPriority priority = IconLoadPriority.Low,
-        IconLoadMeasurement? diagnostics = null)
+        IconLoadMeasurement? diagnostics = null,
+        IconLoadDemand? demand = null)
     {
-        if (priority == IconLoadPriority.High)
+        demand ??= IconLoadDemand.CreateDemanded();
+        var workItem = () => LoadAndCompleteAsync(iconString, fontFamily, streamRef, iconSize, scale, tcs, diagnostics);
+        if (_queue.TryEnqueue(workItem, priority, demand, out var actualPriority))
         {
-            var highPriorityWorkItem = () => LoadAndCompleteAsync(iconString, fontFamily, streamRef, iconSize, scale, tcs, diagnostics);
-            if (_highPriorityQueue.Writer.TryWrite(highPriorityWorkItem))
-            {
-                diagnostics?.Enqueued(IconLoadPriority.High);
-                return true;
-            }
-
+            diagnostics?.Enqueued(actualPriority, WorkerCount);
 #if DEBUG
-            Logger.LogDebug("High priority icon queue full, falling back to low priority");
+            if (priority == IconLoadPriority.High && actualPriority == IconLoadPriority.Low)
+            {
+                Logger.LogDebug("High priority icon queue full, falling back to low priority");
+            }
 #endif
-        }
-
-        var lowPriorityWorkItem = () => LoadAndCompleteAsync(iconString, fontFamily, streamRef, iconSize, scale, tcs, diagnostics);
-        if (_lowPriorityQueue.Writer.TryWrite(lowPriorityWorkItem))
-        {
-            diagnostics?.Enqueued(IconLoadPriority.Low);
             return true;
         }
 
@@ -135,55 +133,16 @@ internal sealed partial class IconLoaderService : IIconLoaderService
 
     public async ValueTask DisposeAsync()
     {
-        _highPriorityQueue.Writer.Complete();
-        _lowPriorityQueue.Writer.Complete();
-
-        await Task.WhenAll(_workers).ConfigureAwait(false);
+        _queue.Complete();
+        var tasks = new Task[_workers.Length + 1];
+        _workers.CopyTo(tasks, 0);
+        tasks[^1] = _queue.Completion;
+        await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
     private async Task ProcessQueueAsync()
     {
-        while (true)
-        {
-            Func<Task>? workItem;
-
-            if (_highPriorityQueue.Reader.TryRead(out workItem))
-            {
-                await ExecuteWork(workItem).ConfigureAwait(false);
-                continue;
-            }
-
-            var highWait = _highPriorityQueue.Reader.WaitToReadAsync().AsTask();
-            var lowWait = _lowPriorityQueue.Reader.WaitToReadAsync().AsTask();
-
-            await Task.WhenAny(highWait, lowWait).ConfigureAwait(false);
-
-            // Check if both channels are completed (disposal)
-            if (_highPriorityQueue.Reader.Completion.IsCompleted &&
-                _lowPriorityQueue.Reader.Completion.IsCompleted)
-            {
-                // Drain any remaining items
-                while (_highPriorityQueue.Reader.TryRead(out workItem))
-                {
-                    await ExecuteWork(workItem).ConfigureAwait(false);
-                }
-
-                while (_lowPriorityQueue.Reader.TryRead(out workItem))
-                {
-                    await ExecuteWork(workItem).ConfigureAwait(false);
-                }
-
-                break;
-            }
-
-            if (_highPriorityQueue.Reader.TryRead(out workItem) ||
-                _lowPriorityQueue.Reader.TryRead(out workItem))
-            {
-                await ExecuteWork(workItem).ConfigureAwait(false);
-            }
-        }
-
-        static async Task ExecuteWork(Func<Task> workItem)
+        while (await _queue.DequeueAsync().ConfigureAwait(false) is { } workItem)
         {
             try
             {

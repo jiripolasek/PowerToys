@@ -171,6 +171,47 @@ internal sealed partial class IconLoadEventSource : EventSource
             demandedBeyondCapacity);
     }
 
+    [Event(22, Level = EventLevel.Informational)]
+    public void SchedulerCommandProcessed(long sessionId, int commandKind, long elapsedMicroseconds, long backlog)
+    {
+        WriteEvent(22, sessionId, commandKind, elapsedMicroseconds, backlog);
+    }
+
+    [Event(23, Level = EventLevel.Informational)]
+    public void WorkerReadyToDispatchCompleted(long sessionId, int demanded, long elapsedMicroseconds)
+    {
+        WriteEvent(23, sessionId, demanded, elapsedMicroseconds);
+    }
+
+    [Event(24, Level = EventLevel.Informational)]
+    public void DemandedIdleCapacityCompleted(long sessionId, long elapsedMicroseconds)
+    {
+        WriteEvent(24, sessionId, elapsedMicroseconds);
+    }
+
+    [Event(25, Level = EventLevel.Informational)]
+    public void SchedulerCoordinatorWoke(long sessionId, int triggerKind, long elapsedMicroseconds)
+    {
+        WriteEvent(25, sessionId, triggerKind, elapsedMicroseconds);
+    }
+
+    [Event(26, Level = EventLevel.Informational)]
+    public void SchedulerBatchCompleted(
+        long sessionId,
+        int commandCount,
+        int dispatchedWorkItemCount,
+        long drainMicroseconds,
+        long passMicroseconds)
+    {
+        WriteEvent(
+            26,
+            sessionId,
+            commandCount,
+            dispatchedWorkItemCount,
+            drainMicroseconds,
+            passMicroseconds);
+    }
+
     [Event(37, Level = EventLevel.Informational)]
     public void UiResponsivenessProbeCompleted(long sessionId, long elapsedMicroseconds)
     {

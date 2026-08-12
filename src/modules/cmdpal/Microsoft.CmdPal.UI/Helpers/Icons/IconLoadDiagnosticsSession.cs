@@ -32,6 +32,7 @@ internal sealed class IconLoadDiagnosticsSession
     private readonly long[] _inputKinds = new long[Enum.GetValues<IconLoadInputKind>().Length];
     private readonly long[] _resultKinds = new long[Enum.GetValues<IconLoadResultKind>().Length];
     private readonly DiagnosticHistogram[][] _requestLatencyByResolutionAndResult = CreateRequestMeasurements();
+    private readonly DiagnosticHistogram[] _appliedRequestLatencyByResolution = CreateResolutionMeasurements();
     private readonly DiagnosticHistogram _requestLatency = new();
     private readonly DiagnosticHistogram _loadLatency = new();
     private readonly DiagnosticHistogram _directGlyphLatency = new();
@@ -39,11 +40,25 @@ internal sealed class IconLoadDiagnosticsSession
     private readonly DiagnosticHistogram _queueLatency = new();
     private readonly DiagnosticHistogram _demandedQueueLatency = new();
     private readonly DiagnosticHistogram _speculativeQueueLatency = new();
+    private readonly DiagnosticHistogram _demandArrivalToWorkerStartWithActiveSpeculative = new();
+    private readonly DiagnosticHistogram _directlyBlockedDemandArrivalToWorkerStart = new();
     private readonly DiagnosticHistogram _backgroundPreparationLatency = new();
     private readonly DiagnosticHistogram _dispatcherWaitLatency = new();
     private readonly DiagnosticHistogram _dispatcherWorkLatency = new();
     private readonly DiagnosticHistogram _uiProbeWaitLatency = new();
     private readonly DiagnosticHistogram _elementUpdateLatency = new();
+    private readonly long[] _schedulerCommandsPublished = new long[Enum.GetValues<IconLoadQueue.QueueCommandKind>().Length];
+    private readonly long[] _schedulerCommandsProcessed = new long[Enum.GetValues<IconLoadQueue.QueueCommandKind>().Length];
+    private readonly DiagnosticHistogram[] _schedulerCommandLatency = CreateSchedulerCommandMeasurements();
+    private readonly DiagnosticHistogram _schedulerSignalToWakeLatency = new();
+    private readonly DiagnosticHistogram _schedulerEmptyBatchSignalToWakeLatency = new();
+    private readonly DiagnosticHistogram[] _schedulerSignalToWakeLatencyByCommandKind = CreateSchedulerCommandMeasurements();
+    private readonly DiagnosticHistogram _schedulerBatchDrainLatency = new();
+    private readonly DiagnosticHistogram _schedulerPassLatency = new();
+    private readonly DiagnosticHistogram _workerReadyToDispatchLatency = new();
+    private readonly DiagnosticHistogram _workerReadyToDemandedDispatchLatency = new();
+    private readonly DiagnosticHistogram _workerReadyToSpeculativeDispatchLatency = new();
+    private readonly DiagnosticHistogram _demandedIdleCapacityDuration = new();
     private readonly InputKindMeasurements[] _inputKindMeasurements = CreateInputKindMeasurements();
     private readonly ElementKindMeasurements[] _elementKindMeasurements = CreateElementKindMeasurements();
     private readonly ConcurrentDictionary<Task<IconSource?>, IconLoadMeasurement> _loadsByTask = new();
@@ -53,6 +68,9 @@ internal sealed class IconLoadDiagnosticsSession
     private readonly ConcurrentDictionary<RequestOriginKey, RequestOriginMeasurements> _requestOriginMeasurements = new();
     private readonly long[] _invalidatedRequestLoadStages = new long[Enum.GetValues<IconLoadDemandStage>().Length];
     private readonly long[] _capacityInterferingSpeculativeStartsByInputKind = new long[Enum.GetValues<IconLoadInputKind>().Length];
+    private readonly long[] _currentActiveSpeculativeWorkersByInputKind = new long[Enum.GetValues<IconLoadInputKind>().Length];
+    private readonly long[] _speculativeWorkerOccupancyAtDemandArrivalsByInputKind = new long[Enum.GetValues<IconLoadInputKind>().Length];
+    private readonly long[] _directlyBlockedDemandArrivalsByInputKind = new long[Enum.GetValues<IconLoadInputKind>().Length];
     private readonly long _processCpuStartedTicks;
     private readonly long _managedAllocatedBytesStarted;
     private readonly long _gcPauseStartedTicks;
@@ -93,6 +111,26 @@ internal sealed class IconLoadDiagnosticsSession
     private long _capacityInterferingSpeculativeStarts;
     private long _demandedLoadsBeyondCapacityAtSpeculativeStarts;
     private long _maximumDemandedLoadsBeyondCapacityAtSpeculativeStart;
+    private long _currentActiveDemandedWorkers;
+    private long _currentActiveSpeculativeWorkers;
+    private long _maximumActiveSpeculativeWorkers;
+    private long _demandedQueueArrivals;
+    private long _demandedArrivalsWithActiveSpeculativeWorkers;
+    private long _speculativeWorkerOccupancyAtDemandArrivals;
+    private long _maximumSpeculativeWorkersAtDemandArrival;
+    private long _demandedArrivalsDirectlyBlockedBySpeculativeCapacity;
+    private long _currentSchedulerCommandBacklog;
+    private long _maximumSchedulerCommandBacklog;
+    private long _schedulerBatchesCompleted;
+    private long _schedulerEmptyBatches;
+    private long _schedulerCommandsDrained;
+    private long _maximumSchedulerBatchSize;
+    private long _schedulerWorkItemsDispatched;
+    private long _maximumSchedulerDispatchCount;
+    private long _demandedIdleCapacityIntervalsStarted;
+    private long _currentDemandedIdleCapacityIntervals;
+    private long _maximumDemandedQueueDepthWithIdleCapacity;
+    private long _maximumAvailableWorkerSlotsWithDemandedWork;
     private long _activeWorkers;
     private long _maximumActiveWorkers;
     private long _elementsCreated;
@@ -153,6 +191,101 @@ internal sealed class IconLoadDiagnosticsSession
         AdaptiveCacheRemovalReason reason)
     {
         GetCacheMeasurements(iconSize, capacity).RecordRemoved(entryCount, reason);
+    }
+
+    public void RecordSchedulerCommandPublished(IconLoadQueue.QueueCommandKind kind)
+    {
+        Interlocked.Increment(ref _schedulerCommandsPublished[(int)kind]);
+        var backlog = Interlocked.Increment(ref _currentSchedulerCommandBacklog);
+        UpdateMaximum(ref _maximumSchedulerCommandBacklog, backlog);
+    }
+
+    public void RecordSchedulerCommandProcessed(IconLoadQueue.QueueCommandKind kind, long elapsedTicks)
+    {
+        Interlocked.Increment(ref _schedulerCommandsProcessed[(int)kind]);
+        _schedulerCommandLatency[(int)kind].Record(elapsedTicks);
+        var backlog = Interlocked.Decrement(ref _currentSchedulerCommandBacklog);
+        Debug.Assert(backlog >= 0, "A processed scheduler command must have been published in the same diagnostic session.");
+        IconLoadEventSource.Log.SchedulerCommandProcessed(
+            Id,
+            (int)kind,
+            ToMicroseconds(elapsedTicks),
+            Math.Max(0, backlog));
+    }
+
+    public void RecordSchedulerCoordinatorWoke(IconLoadQueue.QueueCommandKind triggerKind, long elapsedTicks)
+    {
+        IconLoadEventSource.Log.SchedulerCoordinatorWoke(
+            Id,
+            (int)triggerKind,
+            ToMicroseconds(elapsedTicks));
+    }
+
+    public void RecordSchedulerBatchCompleted(
+        IconLoadQueue.QueueCommandKind triggerKind,
+        long wakeTicks,
+        int commandCount,
+        int dispatchedWorkItemCount,
+        long drainTicks,
+        long passTicks)
+    {
+        Interlocked.Increment(ref _schedulerBatchesCompleted);
+        if (commandCount == 0)
+        {
+            Interlocked.Increment(ref _schedulerEmptyBatches);
+            _schedulerEmptyBatchSignalToWakeLatency.Record(wakeTicks);
+        }
+        else
+        {
+            _schedulerSignalToWakeLatency.Record(wakeTicks);
+            _schedulerSignalToWakeLatencyByCommandKind[(int)triggerKind].Record(wakeTicks);
+            _schedulerBatchDrainLatency.Record(drainTicks);
+            _schedulerPassLatency.Record(passTicks);
+        }
+
+        Interlocked.Add(ref _schedulerCommandsDrained, commandCount);
+        Interlocked.Add(ref _schedulerWorkItemsDispatched, dispatchedWorkItemCount);
+        UpdateMaximum(ref _maximumSchedulerBatchSize, commandCount);
+        UpdateMaximum(ref _maximumSchedulerDispatchCount, dispatchedWorkItemCount);
+        IconLoadEventSource.Log.SchedulerBatchCompleted(
+            Id,
+            commandCount,
+            dispatchedWorkItemCount,
+            ToMicroseconds(drainTicks),
+            ToMicroseconds(passTicks));
+    }
+
+    public void RecordWorkerDispatched(bool demanded, long elapsedTicks)
+    {
+        _workerReadyToDispatchLatency.Record(elapsedTicks);
+        (demanded
+            ? _workerReadyToDemandedDispatchLatency
+            : _workerReadyToSpeculativeDispatchLatency).Record(elapsedTicks);
+        IconLoadEventSource.Log.WorkerReadyToDispatchCompleted(
+            Id,
+            demanded ? 1 : 0,
+            ToMicroseconds(elapsedTicks));
+    }
+
+    public void RecordDemandedIdleCapacityStarted(int demandedQueueDepth, int availableWorkerSlots)
+    {
+        Interlocked.Increment(ref _demandedIdleCapacityIntervalsStarted);
+        Interlocked.Increment(ref _currentDemandedIdleCapacityIntervals);
+        RecordDemandedIdleCapacityObserved(demandedQueueDepth, availableWorkerSlots);
+    }
+
+    public void RecordDemandedIdleCapacityObserved(int demandedQueueDepth, int availableWorkerSlots)
+    {
+        UpdateMaximum(ref _maximumDemandedQueueDepthWithIdleCapacity, demandedQueueDepth);
+        UpdateMaximum(ref _maximumAvailableWorkerSlotsWithDemandedWork, availableWorkerSlots);
+    }
+
+    public void RecordDemandedIdleCapacityCompleted(long elapsedTicks)
+    {
+        var activeIntervals = Interlocked.Decrement(ref _currentDemandedIdleCapacityIntervals);
+        Debug.Assert(activeIntervals >= 0, "A demanded-idle-capacity interval must start before it completes.");
+        _demandedIdleCapacityDuration.Record(elapsedTicks);
+        IconLoadEventSource.Log.DemandedIdleCapacityCompleted(Id, ToMicroseconds(elapsedTicks));
     }
 
     public IconRequestMeasurement BeginRequest(IconRequestReason reason, double scale, IconRequestOrigin origin)
@@ -257,7 +390,11 @@ internal sealed class IconLoadDiagnosticsSession
         {
             lock (requestState.SyncRoot)
             {
-                requestState.OriginMeasurements.RecordCompleted(status, resultKind, elapsedTicks);
+                requestState.OriginMeasurements.RecordCompleted(
+                    status,
+                    resultKind,
+                    requestState.Resolution,
+                    elapsedTicks);
 
                 if (status == IconRequestStatus.Stale && !requestState.Invalidated)
                 {
@@ -281,6 +418,11 @@ internal sealed class IconLoadDiagnosticsSession
                 if (requestState.Resolution is { } resolution)
                 {
                     _requestLatencyByResolutionAndResult[(int)resolution][(int)resultKind].Record(elapsedTicks);
+                    if (status == IconRequestStatus.Applied)
+                    {
+                        _appliedRequestLatencyByResolution[(int)resolution].Record(elapsedTicks);
+                    }
+
                     IconLoadEventSource.Log.RequestAttributed(
                         Id,
                         requestId,
@@ -341,7 +483,7 @@ internal sealed class IconLoadDiagnosticsSession
             remainingLiveRequesters);
     }
 
-    public void RecordLoadEnqueued(long loadId, IconLoadPriority priority)
+    public void RecordLoadEnqueued(long loadId, IconLoadPriority priority, int workerCount)
     {
         ref var currentDepth = ref (priority == IconLoadPriority.High
             ? ref _currentHighQueueDepth
@@ -354,22 +496,28 @@ internal sealed class IconLoadDiagnosticsSession
         UpdateMaximum(ref maximumDepth, depth);
         if (_loadDemandStates.TryGetValue(loadId, out var demandState))
         {
-            demandState.MarkEnqueued();
+            demandState.MarkEnqueued(workerCount);
         }
 
         IconLoadEventSource.Log.LoadEnqueued(Id, loadId, (int)priority, depth);
     }
 
-    private void RecordDemandQueueEnqueued(long loadId, bool demanded)
+    private DemandedQueueArrival? RecordDemandQueueEnqueued(
+        long loadId,
+        IconLoadInputKind inputKind,
+        bool demanded,
+        int workerCount)
     {
         long demandedDepth;
         long speculativeDepth;
+        DemandedQueueArrival? demandArrival = null;
         lock (_queueDemandLock)
         {
             if (demanded)
             {
                 _currentDemandedQueueDepth++;
                 _maximumDemandedQueueDepth = Math.Max(_maximumDemandedQueueDepth, _currentDemandedQueueDepth);
+                demandArrival = RecordDemandArrival(inputKind, workerCount);
             }
             else
             {
@@ -390,12 +538,18 @@ internal sealed class IconLoadDiagnosticsSession
             (int)transition,
             demandedDepth,
             speculativeDepth);
+        return demandArrival;
     }
 
-    private void RecordQueuedDemandTransition(long loadId, bool becameDemanded)
+    private DemandedQueueArrival? RecordQueuedDemandTransition(
+        long loadId,
+        IconLoadInputKind inputKind,
+        bool becameDemanded,
+        int workerCount)
     {
         long demandedDepth;
         long speculativeDepth;
+        DemandedQueueArrival? demandArrival = null;
         lock (_queueDemandLock)
         {
             if (becameDemanded)
@@ -405,6 +559,7 @@ internal sealed class IconLoadDiagnosticsSession
                 _currentDemandedQueueDepth++;
                 _queuedDemandPromotions++;
                 _maximumDemandedQueueDepth = Math.Max(_maximumDemandedQueueDepth, _currentDemandedQueueDepth);
+                demandArrival = RecordDemandArrival(inputKind, workerCount);
             }
             else
             {
@@ -425,15 +580,60 @@ internal sealed class IconLoadDiagnosticsSession
             (int)(becameDemanded ? IconLoadQueueDemandTransition.Promoted : IconLoadQueueDemandTransition.Demoted),
             demandedDepth,
             speculativeDepth);
+        return demandArrival;
+    }
+
+    private DemandedQueueArrival RecordDemandArrival(IconLoadInputKind inputKind, int workerCount)
+    {
+        Debug.Assert(Monitor.IsEntered(_queueDemandLock), "Demand arrival accounting requires the queue-demand lock.");
+
+        var activeSpeculativeWorkers = _currentActiveSpeculativeWorkers;
+        var activeDemandedWorkers = _currentActiveDemandedWorkers;
+        var remainingWorkerCapacity = Math.Max(
+            0,
+            workerCount - activeDemandedWorkers - activeSpeculativeWorkers);
+        var capacityWithoutSpeculativeWorkers = Math.Max(0, workerCount - activeDemandedWorkers);
+        var directlyBlockedBySpeculativeCapacity = activeSpeculativeWorkers > 0
+            && _currentDemandedQueueDepth > remainingWorkerCapacity
+            && _currentDemandedQueueDepth <= capacityWithoutSpeculativeWorkers;
+
+        _demandedQueueArrivals++;
+        if (activeSpeculativeWorkers > 0)
+        {
+            _demandedArrivalsWithActiveSpeculativeWorkers++;
+            _speculativeWorkerOccupancyAtDemandArrivals += activeSpeculativeWorkers;
+            _maximumSpeculativeWorkersAtDemandArrival = Math.Max(
+                _maximumSpeculativeWorkersAtDemandArrival,
+                activeSpeculativeWorkers);
+
+            for (var i = 0; i < _currentActiveSpeculativeWorkersByInputKind.Length; i++)
+            {
+                _speculativeWorkerOccupancyAtDemandArrivalsByInputKind[i] +=
+                    _currentActiveSpeculativeWorkersByInputKind[i];
+            }
+        }
+
+        if (directlyBlockedBySpeculativeCapacity)
+        {
+            _demandedArrivalsDirectlyBlockedBySpeculativeCapacity++;
+            _directlyBlockedDemandArrivalsByInputKind[(int)inputKind]++;
+        }
+
+        return new DemandedQueueArrival(
+            Stopwatch.GetTimestamp(),
+            activeSpeculativeWorkers,
+            directlyBlockedBySpeculativeCapacity);
     }
 
     private void RecordDemandWorkerStarted(
         long loadId,
         IconLoadInputKind inputKind,
         bool demanded,
+        long startedAt,
         long queueTicks,
         long activeWorkers,
-        int workerCount)
+        int workerCount,
+        DemandedQueueArrival? demandArrival)
     {
         long demandedDepth;
         long speculativeDepth;
@@ -445,12 +645,18 @@ internal sealed class IconLoadDiagnosticsSession
                 Debug.Assert(_currentDemandedQueueDepth > 0, "A demanded worker start requires a demanded queued load.");
                 _currentDemandedQueueDepth--;
                 _demandedWorkerStarts++;
+                _currentActiveDemandedWorkers++;
             }
             else
             {
                 Debug.Assert(_currentSpeculativeQueueDepth > 0, "A speculative worker start requires a speculative queued load.");
                 _currentSpeculativeQueueDepth--;
                 _speculativeWorkerStarts++;
+                _currentActiveSpeculativeWorkers++;
+                _currentActiveSpeculativeWorkersByInputKind[(int)inputKind]++;
+                _maximumActiveSpeculativeWorkers = Math.Max(
+                    _maximumActiveSpeculativeWorkers,
+                    _currentActiveSpeculativeWorkers);
             }
 
             demandedDepth = _currentDemandedQueueDepth;
@@ -477,10 +683,22 @@ internal sealed class IconLoadDiagnosticsSession
         if (demanded)
         {
             _demandedQueueLatency.Record(queueTicks);
+            _inputKindMeasurements[(int)inputKind].DemandedQueueLatency.Record(queueTicks);
         }
         else
         {
             _speculativeQueueLatency.Record(queueTicks);
+            _inputKindMeasurements[(int)inputKind].SpeculativeQueueLatency.Record(queueTicks);
+        }
+
+        if (demanded && demandArrival is { SpeculativeWorkersAtArrival: > 0 } arrival)
+        {
+            var demandArrivalToWorkerStartTicks = Math.Max(0, startedAt - arrival.ArrivedAt);
+            _demandArrivalToWorkerStartWithActiveSpeculative.Record(demandArrivalToWorkerStartTicks);
+            if (arrival.DirectlyBlockedBySpeculativeCapacity)
+            {
+                _directlyBlockedDemandArrivalToWorkerStart.Record(demandArrivalToWorkerStartTicks);
+            }
         }
 
         IconLoadEventSource.Log.LoadDemandAtWorkerStart(
@@ -492,6 +710,70 @@ internal sealed class IconLoadDiagnosticsSession
             activeWorkers,
             workerCount,
             demandedBeyondCapacity);
+    }
+
+    private void RecordActiveWorkerDemandTransition(IconLoadInputKind inputKind, bool becameDemanded)
+    {
+        lock (_queueDemandLock)
+        {
+            if (becameDemanded)
+            {
+                Debug.Assert(_currentActiveSpeculativeWorkers > 0, "An active promotion requires a speculative worker.");
+                if (_currentActiveSpeculativeWorkers > 0)
+                {
+                    _currentActiveSpeculativeWorkers--;
+                }
+
+                if (_currentActiveSpeculativeWorkersByInputKind[(int)inputKind] > 0)
+                {
+                    _currentActiveSpeculativeWorkersByInputKind[(int)inputKind]--;
+                }
+
+                _currentActiveDemandedWorkers++;
+            }
+            else
+            {
+                Debug.Assert(_currentActiveDemandedWorkers > 0, "An active demotion requires a demanded worker.");
+                if (_currentActiveDemandedWorkers > 0)
+                {
+                    _currentActiveDemandedWorkers--;
+                }
+
+                _currentActiveSpeculativeWorkers++;
+                _currentActiveSpeculativeWorkersByInputKind[(int)inputKind]++;
+                _maximumActiveSpeculativeWorkers = Math.Max(
+                    _maximumActiveSpeculativeWorkers,
+                    _currentActiveSpeculativeWorkers);
+            }
+        }
+    }
+
+    private void RecordActiveWorkerCompleted(IconLoadInputKind inputKind, bool demanded)
+    {
+        lock (_queueDemandLock)
+        {
+            if (demanded)
+            {
+                Debug.Assert(_currentActiveDemandedWorkers > 0, "A demanded completion requires an active demanded worker.");
+                if (_currentActiveDemandedWorkers > 0)
+                {
+                    _currentActiveDemandedWorkers--;
+                }
+            }
+            else
+            {
+                Debug.Assert(_currentActiveSpeculativeWorkers > 0, "A speculative completion requires an active speculative worker.");
+                if (_currentActiveSpeculativeWorkers > 0)
+                {
+                    _currentActiveSpeculativeWorkers--;
+                }
+
+                if (_currentActiveSpeculativeWorkersByInputKind[(int)inputKind] > 0)
+                {
+                    _currentActiveSpeculativeWorkersByInputKind[(int)inputKind]--;
+                }
+            }
+        }
     }
 
     public void RecordLoadRejected(long loadId)
@@ -706,6 +988,10 @@ internal sealed class IconLoadDiagnosticsSession
         _dispatcherWorkLatency.Append(builder, "Dispatcher callback wall time");
         builder.AppendLine();
 
+        builder.AppendLine("Scheduler coordination");
+        AppendSchedulerMeasurements(builder);
+        builder.AppendLine();
+
         builder.AppendLine("Load demand");
         AppendLoadDemandMeasurements(builder);
         builder.AppendLine();
@@ -864,6 +1150,86 @@ internal sealed class IconLoadDiagnosticsSession
             : 0;
     }
 
+    private void AppendSchedulerMeasurements(StringBuilder builder)
+    {
+        builder.AppendLine("  Definition: the command backlog is work published to the lock-free coordinator but not yet processed during this diagnostic session.");
+        builder.AppendLine("  Commands published by kind");
+        AppendEnumCounts<IconLoadQueue.QueueCommandKind>(builder, _schedulerCommandsPublished, "    ");
+        builder.AppendLine("  Commands processed by kind");
+        AppendEnumCounts<IconLoadQueue.QueueCommandKind>(builder, _schedulerCommandsProcessed, "    ");
+        AppendValue(
+            builder,
+            "Commands outstanding at stop",
+            Math.Max(0, Volatile.Read(ref _currentSchedulerCommandBacklog)));
+        AppendValue(builder, "Maximum command backlog", Volatile.Read(ref _maximumSchedulerCommandBacklog));
+        builder.AppendLine("  Publish to coordinator processing by command kind");
+
+        var commandKinds = Enum.GetValues<IconLoadQueue.QueueCommandKind>();
+        for (var i = 0; i < commandKinds.Length; i++)
+        {
+            _schedulerCommandLatency[i].Append(builder, commandKinds[i].ToString(), "    ");
+        }
+
+        builder.AppendLine("  Coordinator wake and batch processing");
+        builder.AppendLine("    Definition: the first command to complete the current signal triggers the next coordinator pass; later pulses coalesce. If the coordinator is still processing, latency includes the remainder of that pass. Drain time excludes worker dispatch.");
+        builder.AppendLine("    Empty batches occur when the preceding pass already consumed the triggering command; their signal-to-pass-start latency is reported separately.");
+        _schedulerSignalToWakeLatency.Append(builder, "Signal to coordinator pass start for non-empty batches", "    ");
+        _schedulerEmptyBatchSignalToWakeLatency.Append(builder, "Signal to coordinator pass start for empty coalesced batches", "    ");
+        builder.AppendLine("    Non-empty batch signal to coordinator pass start by triggering command kind");
+        for (var i = 0; i < commandKinds.Length; i++)
+        {
+            _schedulerSignalToWakeLatencyByCommandKind[i].Append(
+                builder,
+                commandKinds[i].ToString(),
+                "      ");
+        }
+
+        var batchesCompleted = Volatile.Read(ref _schedulerBatchesCompleted);
+        var emptyBatches = Volatile.Read(ref _schedulerEmptyBatches);
+        var nonEmptyBatches = Math.Max(0, batchesCompleted - emptyBatches);
+        var commandsDrained = Volatile.Read(ref _schedulerCommandsDrained);
+        var workItemsDispatched = Volatile.Read(ref _schedulerWorkItemsDispatched);
+        AppendValue(builder, "Batches completed", batchesCompleted, "    ");
+        AppendValue(builder, "Empty batches", emptyBatches, "    ");
+        AppendValue(builder, "Commands drained", commandsDrained, "    ");
+        AppendAverage(builder, "Average commands per non-empty batch", commandsDrained, nonEmptyBatches, "    ");
+        AppendValue(builder, "Maximum commands in one batch", Volatile.Read(ref _maximumSchedulerBatchSize), "    ");
+        AppendValue(builder, "Work items dispatched", workItemsDispatched, "    ");
+        AppendAverage(builder, "Average work items dispatched per non-empty batch", workItemsDispatched, nonEmptyBatches, "    ");
+        AppendValue(builder, "Maximum work items dispatched in one batch", Volatile.Read(ref _maximumSchedulerDispatchCount), "    ");
+        _schedulerBatchDrainLatency.Append(builder, "Non-empty batch command drain wall time", "    ");
+        _schedulerPassLatency.Append(builder, "Non-empty batch pass-start-to-dispatch-complete wall time", "    ");
+
+        builder.AppendLine("  Worker handoff");
+        builder.AppendLine("    Definition: measured from a worker publishing readiness until the coordinator assigns work to that worker slot; this includes ordinary idle time before work arrives.");
+        _workerReadyToDispatchLatency.Append(builder, "Ready to work dispatch", "    ");
+        _workerReadyToDemandedDispatchLatency.Append(builder, "Ready to demanded work dispatch", "    ");
+        _workerReadyToSpeculativeDispatchLatency.Append(builder, "Ready to speculative work dispatch", "    ");
+        builder.AppendLine("  Demanded work queued while worker capacity was available");
+        builder.AppendLine("    Definition: a coordinator-state interval with at least one demanded queued load and at least one worker-ready slot. It normally spans command draining before dispatch.");
+        AppendValue(
+            builder,
+            "Intervals started",
+            Volatile.Read(ref _demandedIdleCapacityIntervalsStarted),
+            "    ");
+        AppendValue(
+            builder,
+            "Intervals active at stop",
+            Math.Max(0, Volatile.Read(ref _currentDemandedIdleCapacityIntervals)),
+            "    ");
+        AppendValue(
+            builder,
+            "Maximum demanded queue depth during an interval",
+            Volatile.Read(ref _maximumDemandedQueueDepthWithIdleCapacity),
+            "    ");
+        AppendValue(
+            builder,
+            "Maximum available worker slots during an interval",
+            Volatile.Read(ref _maximumAvailableWorkerSlotsWithDemandedWork),
+            "    ");
+        _demandedIdleCapacityDuration.Append(builder, "Interval duration", "    ");
+    }
+
     private void AppendLoadDemandMeasurements(StringBuilder builder)
     {
         var linkedRequests = 0L;
@@ -973,7 +1339,17 @@ internal sealed class IconLoadDiagnosticsSession
         long capacityInterferingSpeculativeStarts;
         long demandedLoadsBeyondCapacityAtSpeculativeStarts;
         long maximumDemandedLoadsBeyondCapacityAtSpeculativeStart;
+        long currentActiveDemandedWorkers;
+        long currentActiveSpeculativeWorkers;
+        long maximumActiveSpeculativeWorkers;
+        long demandedQueueArrivals;
+        long demandedArrivalsWithActiveSpeculativeWorkers;
+        long speculativeWorkerOccupancyAtDemandArrivals;
+        long maximumSpeculativeWorkersAtDemandArrival;
+        long demandedArrivalsDirectlyBlockedBySpeculativeCapacity;
         long[] capacityInterferingSpeculativeStartsByInputKind;
+        long[] speculativeWorkerOccupancyAtDemandArrivalsByInputKind;
+        long[] directlyBlockedDemandArrivalsByInputKind;
 
         lock (_queueDemandLock)
         {
@@ -989,11 +1365,21 @@ internal sealed class IconLoadDiagnosticsSession
             capacityInterferingSpeculativeStarts = _capacityInterferingSpeculativeStarts;
             demandedLoadsBeyondCapacityAtSpeculativeStarts = _demandedLoadsBeyondCapacityAtSpeculativeStarts;
             maximumDemandedLoadsBeyondCapacityAtSpeculativeStart = _maximumDemandedLoadsBeyondCapacityAtSpeculativeStart;
+            currentActiveDemandedWorkers = _currentActiveDemandedWorkers;
+            currentActiveSpeculativeWorkers = _currentActiveSpeculativeWorkers;
+            maximumActiveSpeculativeWorkers = _maximumActiveSpeculativeWorkers;
+            demandedQueueArrivals = _demandedQueueArrivals;
+            demandedArrivalsWithActiveSpeculativeWorkers = _demandedArrivalsWithActiveSpeculativeWorkers;
+            speculativeWorkerOccupancyAtDemandArrivals = _speculativeWorkerOccupancyAtDemandArrivals;
+            maximumSpeculativeWorkersAtDemandArrival = _maximumSpeculativeWorkersAtDemandArrival;
+            demandedArrivalsDirectlyBlockedBySpeculativeCapacity = _demandedArrivalsDirectlyBlockedBySpeculativeCapacity;
             capacityInterferingSpeculativeStartsByInputKind = [.. _capacityInterferingSpeculativeStartsByInputKind];
+            speculativeWorkerOccupancyAtDemandArrivalsByInputKind = [.. _speculativeWorkerOccupancyAtDemandArrivalsByInputKind];
+            directlyBlockedDemandArrivalsByInputKind = [.. _directlyBlockedDemandArrivalsByInputKind];
         }
 
         builder.AppendLine("  Demand-aware queue view");
-        builder.AppendLine("    Definition: demanded means at least one live IconBox request; speculative means none. Measurement only; scheduling is unchanged.");
+        builder.AppendLine("    Definition: demanded means at least one live IconBox request; speculative means none. Queue scheduling prefers demanded work; worker count is unchanged.");
         AppendValue(builder, "Demanded loads queued at stop", currentDemandedQueueDepth, "    ");
         AppendValue(builder, "Speculative loads queued at stop", currentSpeculativeQueueDepth, "    ");
         AppendValue(builder, "Maximum demanded queue depth", maximumDemandedQueueDepth, "    ");
@@ -1002,12 +1388,35 @@ internal sealed class IconLoadDiagnosticsSession
         AppendValue(builder, "Queued promotions after demand returned", queuedDemandPromotions, "    ");
         AppendValue(builder, "Workers started demanded", demandedWorkerStarts, "    ");
         AppendValue(builder, "Workers started speculative", speculativeWorkerStarts, "    ");
+        AppendValue(builder, "Active demanded workers at stop", currentActiveDemandedWorkers, "    ");
+        AppendValue(builder, "Active speculative workers at stop", currentActiveSpeculativeWorkers, "    ");
+        AppendValue(builder, "Maximum active speculative workers", maximumActiveSpeculativeWorkers, "    ");
         AppendValue(builder, "Speculative starts with demanded loads queued", speculativeStartsWithDemandedLoadsQueued, "    ");
         AppendValue(builder, "Speculative starts leaving demanded loads beyond remaining worker capacity", capacityInterferingSpeculativeStarts, "    ");
         AppendValue(builder, "Demanded loads beyond remaining capacity across those starts", demandedLoadsBeyondCapacityAtSpeculativeStarts, "    ");
         AppendValue(builder, "Maximum demanded loads beyond remaining capacity at one start", maximumDemandedLoadsBeyondCapacityAtSpeculativeStart, "    ");
         builder.AppendLine("    Capacity-interfering speculative starts by input kind");
         AppendEnumCounts<IconLoadInputKind>(builder, capacityInterferingSpeculativeStartsByInputKind, "      ");
+        builder.AppendLine("    Demanded arrivals and active speculative capacity");
+        builder.AppendLine("      Directly blocked means the arriving load's queue position could use capacity occupied by speculative workers and would fit if those workers were absent.");
+        AppendValue(builder, "Demanded queue arrivals", demandedQueueArrivals, "      ");
+        AppendValue(builder, "Arrivals with active speculative workers", demandedArrivalsWithActiveSpeculativeWorkers, "      ");
+        AppendValue(builder, "Sum of active speculative workers observed at those arrivals", speculativeWorkerOccupancyAtDemandArrivals, "      ");
+        AppendValue(builder, "Maximum speculative workers active at one demanded arrival", maximumSpeculativeWorkersAtDemandArrival, "      ");
+        AppendValue(builder, "Arrivals directly blocked by speculative worker capacity", demandedArrivalsDirectlyBlockedBySpeculativeCapacity, "      ");
+        builder.AppendLine("      Speculative worker occupancy observed at demanded arrivals by speculative input kind");
+        AppendEnumCounts<IconLoadInputKind>(builder, speculativeWorkerOccupancyAtDemandArrivalsByInputKind, "        ");
+        builder.AppendLine("      Directly blocked demanded arrivals by demanded input kind");
+        AppendEnumCounts<IconLoadInputKind>(builder, directlyBlockedDemandArrivalsByInputKind, "        ");
+        builder.AppendLine("      Timing samples include affected arrivals that were still demanded when their worker started.");
+        _demandArrivalToWorkerStartWithActiveSpeculative.Append(
+            builder,
+            "Demand arrival to worker start with speculative workers active",
+            "      ");
+        _directlyBlockedDemandArrivalToWorkerStart.Append(
+            builder,
+            "Directly blocked demand arrival to worker start",
+            "      ");
         _demandedQueueLatency.Append(builder, "Demanded queue wait", "    ");
         _speculativeQueueLatency.Append(builder, "Speculative queue wait", "    ");
     }
@@ -1028,6 +1437,8 @@ internal sealed class IconLoadDiagnosticsSession
             measurements.LoadLatency.Append(builder, "Enqueue to completion", "    ");
             measurements.DirectGlyphLatency.Append(builder, "Direct glyph construction", "    ");
             measurements.QueueLatency.Append(builder, "Queue wait", "    ");
+            measurements.DemandedQueueLatency.Append(builder, "Demanded queue wait", "    ");
+            measurements.SpeculativeQueueLatency.Append(builder, "Speculative queue wait", "    ");
             measurements.BackgroundPreparationLatency.Append(builder, "Background preparation", "    ");
             measurements.DispatcherWaitLatency.Append(builder, "Dispatcher wait", "    ");
             measurements.DispatcherWorkLatency.Append(builder, "Dispatcher callback wall time", "    ");
@@ -1093,6 +1504,9 @@ internal sealed class IconLoadDiagnosticsSession
             builder.Append("    Unattributed completed requests: ")
                 .AppendLine(unattributedRequests.ToString(CultureInfo.InvariantCulture));
         }
+
+        builder.AppendLine("  Applied request to completion by provider resolution");
+        AppendResolutionMeasurements(builder, _appliedRequestLatencyByResolution, "    ");
     }
 
     private void AppendRequestOriginMeasurements(StringBuilder builder)
@@ -1194,6 +1608,28 @@ internal sealed class IconLoadDiagnosticsSession
         return measurements;
     }
 
+    private static DiagnosticHistogram[] CreateResolutionMeasurements()
+    {
+        var measurements = new DiagnosticHistogram[Enum.GetValues<IconProviderResolution>().Length];
+        for (var i = 0; i < measurements.Length; i++)
+        {
+            measurements[i] = new DiagnosticHistogram();
+        }
+
+        return measurements;
+    }
+
+    private static DiagnosticHistogram[] CreateSchedulerCommandMeasurements()
+    {
+        var measurements = new DiagnosticHistogram[Enum.GetValues<IconLoadQueue.QueueCommandKind>().Length];
+        for (var i = 0; i < measurements.Length; i++)
+        {
+            measurements[i] = new DiagnosticHistogram();
+        }
+
+        return measurements;
+    }
+
     private static ElementKindMeasurements[] CreateElementKindMeasurements()
     {
         var measurements = new ElementKindMeasurements[Enum.GetValues<IconLoadResultKind>().Length];
@@ -1215,9 +1651,38 @@ internal sealed class IconLoadDiagnosticsSession
         }
     }
 
+    private static void AppendResolutionMeasurements(
+        StringBuilder builder,
+        DiagnosticHistogram[] measurements,
+        string indentation)
+    {
+        var resolutions = Enum.GetValues<IconProviderResolution>();
+        for (var i = 0; i < resolutions.Length; i++)
+        {
+            measurements[i].Append(builder, resolutions[i].ToString(), indentation);
+        }
+    }
+
     private static void AppendValue(StringBuilder builder, string name, long value, string indentation = "  ")
     {
         builder.Append(indentation).Append(name).Append(": ").AppendLine(value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private static void AppendAverage(
+        StringBuilder builder,
+        string name,
+        long total,
+        long count,
+        string indentation)
+    {
+        builder.Append(indentation).Append(name).Append(": ");
+        if (count == 0)
+        {
+            builder.AppendLine("n/a");
+            return;
+        }
+
+        builder.AppendLine((total / (double)count).ToString("0.###", CultureInfo.InvariantCulture));
     }
 
     private static long Sum(long[] values)
@@ -1378,6 +1843,11 @@ internal sealed class IconLoadDiagnosticsSession
         bool StartedWithoutLiveRequester,
         long WithoutRequesterElapsedTicks);
 
+    private readonly record struct DemandedQueueArrival(
+        long ArrivedAt,
+        long SpeculativeWorkersAtArrival,
+        bool DirectlyBlockedBySpeculativeCapacity);
+
     private readonly record struct LoadCompletionDemandResult(
         bool CompletedWithoutLiveRequester,
         long WithoutRequesterElapsedTicks);
@@ -1408,6 +1878,7 @@ internal sealed class IconLoadDiagnosticsSession
         private readonly long[] _providerResolutions = new long[Enum.GetValues<IconProviderResolution>().Length];
         private readonly long[] _resultKinds = new long[Enum.GetValues<IconLoadResultKind>().Length];
         private readonly DiagnosticHistogram[] _requestLatencyByStatus = CreateStatusMeasurements();
+        private readonly DiagnosticHistogram[] _appliedRequestLatencyByResolution = CreateResolutionMeasurements();
         private readonly DiagnosticHistogram _requestLatency = new();
         private readonly ConcurrentDictionary<long, byte> _iconBoxIds = new();
         private long _requestsStarted;
@@ -1426,12 +1897,20 @@ internal sealed class IconLoadDiagnosticsSession
             Interlocked.Increment(ref _providerResolutions[(int)resolution]);
         }
 
-        public void RecordCompleted(IconRequestStatus status, IconLoadResultKind resultKind, long elapsedTicks)
+        public void RecordCompleted(
+            IconRequestStatus status,
+            IconLoadResultKind resultKind,
+            IconProviderResolution? resolution,
+            long elapsedTicks)
         {
             Interlocked.Increment(ref _requestStatuses[(int)status]);
             Interlocked.Increment(ref _resultKinds[(int)resultKind]);
             _requestLatency.Record(elapsedTicks);
             _requestLatencyByStatus[(int)status].Record(elapsedTicks);
+            if (status == IconRequestStatus.Applied && resolution is { } appliedResolution)
+            {
+                _appliedRequestLatencyByResolution[(int)appliedResolution].Record(elapsedTicks);
+            }
         }
 
         public void Append(StringBuilder builder)
@@ -1466,6 +1945,9 @@ internal sealed class IconLoadDiagnosticsSession
             {
                 builder.AppendLine("      no completed requests");
             }
+
+            builder.AppendLine("    Applied request to completion by provider resolution");
+            AppendResolutionMeasurements(builder, _appliedRequestLatencyByResolution, "      ");
         }
 
         private void AppendNonzeroResultKinds(StringBuilder builder)
@@ -1548,6 +2030,8 @@ internal sealed class IconLoadDiagnosticsSession
         private bool _completedWithoutLiveRequester;
         private long _withoutRequesterToCompletionTicks = -1;
         private int _cacheHitsAfterUnrequestedCompletion;
+        private int _workerCount = 1;
+        private DemandedQueueArrival? _pendingDemandArrival;
 
         public LoadDemandState(IconLoadDiagnosticsSession session, long loadId, IconLoadInputKind inputKind)
         {
@@ -1596,9 +2080,20 @@ internal sealed class IconLoadDiagnosticsSession
                     }
                 }
 
-                if (!wasDemanded && _liveRequesters > 0 && _stage == IconLoadDemandStage.Queued)
+                if (!wasDemanded && _liveRequesters > 0)
                 {
-                    _session.RecordQueuedDemandTransition(_loadId, becameDemanded: true);
+                    if (_stage == IconLoadDemandStage.Queued)
+                    {
+                        _pendingDemandArrival = _session.RecordQueuedDemandTransition(
+                            _loadId,
+                            _inputKind,
+                            becameDemanded: true,
+                            _workerCount);
+                    }
+                    else if (_stage == IconLoadDemandStage.WorkerActive)
+                    {
+                        _session.RecordActiveWorkerDemandTransition(_inputKind, becameDemanded: true);
+                    }
                 }
 
                 return new LoadResolutionResult(
@@ -1625,9 +2120,21 @@ internal sealed class IconLoadDiagnosticsSession
                     BeginWithoutRequester(invalidatedAt);
                 }
 
-                if (wasDemanded && _liveRequesters == 0 && _stage == IconLoadDemandStage.Queued)
+                if (wasDemanded && _liveRequesters == 0)
                 {
-                    _session.RecordQueuedDemandTransition(_loadId, becameDemanded: false);
+                    if (_stage == IconLoadDemandStage.Queued)
+                    {
+                        _pendingDemandArrival = null;
+                        _session.RecordQueuedDemandTransition(
+                            _loadId,
+                            _inputKind,
+                            becameDemanded: false,
+                            _workerCount);
+                    }
+                    else if (_stage == IconLoadDemandStage.WorkerActive)
+                    {
+                        _session.RecordActiveWorkerDemandTransition(_inputKind, becameDemanded: false);
+                    }
                 }
 
                 return new LoadRequestInvalidationResult(_stage, _liveRequesters);
@@ -1638,9 +2145,15 @@ internal sealed class IconLoadDiagnosticsSession
         {
             lock (_lock)
             {
+                var wasDemanded = _liveRequesters > 0;
                 if (_liveRequesters > 0)
                 {
                     _liveRequesters--;
+                }
+
+                if (wasDemanded && _liveRequesters == 0 && _stage == IconLoadDemandStage.WorkerActive)
+                {
+                    _session.RecordActiveWorkerDemandTransition(_inputKind, becameDemanded: false);
                 }
             }
         }
@@ -1670,14 +2183,19 @@ internal sealed class IconLoadDiagnosticsSession
             }
         }
 
-        public void MarkEnqueued()
+        public void MarkEnqueued(int workerCount)
         {
             lock (_lock)
             {
                 if (_stage == IconLoadDemandStage.BeforeEnqueue)
                 {
+                    _workerCount = Math.Max(1, workerCount);
                     _stage = IconLoadDemandStage.Queued;
-                    _session.RecordDemandQueueEnqueued(_loadId, _liveRequesters > 0);
+                    _pendingDemandArrival = _session.RecordDemandQueueEnqueued(
+                        _loadId,
+                        _inputKind,
+                        _liveRequesters > 0,
+                        _workerCount);
                 }
             }
         }
@@ -1707,9 +2225,12 @@ internal sealed class IconLoadDiagnosticsSession
                         _loadId,
                         _inputKind,
                         _liveRequesters > 0,
+                        startedAt,
                         queueTicks,
                         activeWorkers,
-                        workerCount);
+                        workerCount,
+                        _pendingDemandArrival);
+                    _pendingDemandArrival = null;
                 }
 
                 if (_stage is not IconLoadDemandStage.Completed and not IconLoadDemandStage.Rejected)
@@ -1733,6 +2254,11 @@ internal sealed class IconLoadDiagnosticsSession
         {
             lock (_lock)
             {
+                if (_stage == IconLoadDemandStage.WorkerActive)
+                {
+                    _session.RecordActiveWorkerCompleted(_inputKind, _liveRequesters > 0);
+                }
+
                 _stage = IconLoadDemandStage.Completed;
                 _resultKind = resultKind;
                 if (_withoutRequester && _liveRequesters == 0)
@@ -1777,6 +2303,10 @@ internal sealed class IconLoadDiagnosticsSession
         public DiagnosticHistogram DirectGlyphLatency { get; } = new();
 
         public DiagnosticHistogram QueueLatency { get; } = new();
+
+        public DiagnosticHistogram DemandedQueueLatency { get; } = new();
+
+        public DiagnosticHistogram SpeculativeQueueLatency { get; } = new();
 
         public DiagnosticHistogram BackgroundPreparationLatency { get; } = new();
 

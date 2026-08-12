@@ -37,11 +37,11 @@ internal sealed class IconLoadMeasurement
         InputKind = inputKind;
     }
 
-    public void Enqueued(IconLoadPriority priority)
+    public void Enqueued(IconLoadPriority priority, int workerCount = 1)
     {
         _queuePriority = (int)priority;
         _enqueuedAt = Stopwatch.GetTimestamp();
-        Session.RecordLoadEnqueued(Id, priority);
+        Session.RecordLoadEnqueued(Id, priority, Math.Max(1, workerCount));
         Volatile.Write(ref _enqueued, 1);
     }
 
