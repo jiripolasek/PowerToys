@@ -10,6 +10,13 @@ namespace Microsoft.CmdPal.UI.Helpers;
 
 internal interface IIconLoaderService : IAsyncDisposable
 {
+    bool TryLoadGlyph(
+        string? iconString,
+        string? fontFamily,
+        Size iconSize,
+        double scale,
+        out IconSource? result);
+
     bool TryEnqueueLoad(
         string? iconString,
         string? fontFamily,

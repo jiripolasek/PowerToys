@@ -64,6 +64,28 @@ public partial class CachedIconSourceProviderTests
 
     [TestMethod]
     [Timeout(5_000)]
+    public async Task SuccessfulDirectGlyphLoadIsCachedWithoutQueueing()
+    {
+        var loader = new ControllableIconLoader { LoadGlyphDirectly = true };
+        var provider = new CachedIconSourceProvider(loader, new Size(20, 20), cacheSize: 16);
+        var icon = new IconDataViewModel { Icon = "glyph" };
+
+        var first = provider.GetIconSource(icon, 1.0);
+        await first;
+
+        Assert.IsTrue(
+            SpinWait.SpinUntil(() => GetInFlightCount(provider) == 0, TimeSpan.FromSeconds(2)),
+            "The direct glyph load was not retired from the in-flight dictionary.");
+
+        var cached = provider.GetIconSource(icon, 1.0);
+
+        Assert.AreSame(first, cached);
+        Assert.AreEqual(1, loader.GlyphAttemptCount);
+        Assert.AreEqual(0, loader.EnqueueCount);
+    }
+
+    [TestMethod]
+    [Timeout(5_000)]
     public async Task DistinctStreamReferencesWithCollidingRuntimeHashesDoNotShareLoad()
     {
         var (firstStream, secondStream) = FindRuntimeHashCollision();
@@ -154,6 +176,19 @@ public partial class CachedIconSourceProviderTests
         Assert.AreEqual(1, loader.EnqueueCount);
     }
 
+    [TestMethod]
+    public async Task UncachedProviderLoadsGlyphDirectlyWithoutQueueing()
+    {
+        var loader = new ControllableIconLoader { LoadGlyphDirectly = true };
+        var provider = new IconSourceProvider(loader, new Size(16, 16));
+
+        var result = await provider.GetIconSource(new IconDataViewModel { Icon = "glyph" }, 1.0);
+
+        Assert.IsNull(result);
+        Assert.AreEqual(1, loader.GlyphAttemptCount);
+        Assert.AreEqual(0, loader.EnqueueCount);
+    }
+
     private static int GetInFlightCount(CachedIconSourceProvider provider)
     {
         var field = typeof(CachedIconSourceProvider).GetField("_inFlight", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -192,10 +227,27 @@ public partial class CachedIconSourceProviderTests
     {
         private readonly ConcurrentQueue<TaskCompletionSource<IconSource?>> _pending = new();
         private int _enqueueCount;
+        private int _glyphAttemptCount;
 
         public bool AcceptLoads { get; set; } = true;
 
+        public bool LoadGlyphDirectly { get; set; }
+
         public int EnqueueCount => Volatile.Read(ref _enqueueCount);
+
+        public int GlyphAttemptCount => Volatile.Read(ref _glyphAttemptCount);
+
+        public bool TryLoadGlyph(
+            string? iconString,
+            string? fontFamily,
+            Size iconSize,
+            double scale,
+            out IconSource? result)
+        {
+            Interlocked.Increment(ref _glyphAttemptCount);
+            result = null;
+            return LoadGlyphDirectly;
+        }
 
         public bool TryEnqueueLoad(
             string? iconString,

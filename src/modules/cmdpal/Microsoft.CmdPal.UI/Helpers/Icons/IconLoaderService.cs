@@ -8,6 +8,7 @@ using ManagedCommon;
 using Microsoft.Terminal.UI;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Foundation;
 using Windows.Storage.Streams;
@@ -37,6 +38,63 @@ internal sealed partial class IconLoaderService : IIconLoaderService
         for (var i = 0; i < WorkerCount; i++)
         {
             _workers[i] = Task.Run(ProcessQueueAsync);
+        }
+    }
+
+    public bool TryLoadGlyph(
+        string? iconString,
+        string? fontFamily,
+        Size iconSize,
+        double scale,
+        out IconSource? result)
+    {
+        result = null;
+
+        // IconSource is a XAML object. If a caller ever reaches the provider away from
+        // the UI thread, preserve the existing dispatcher-based path.
+        if (!_dispatcherQueue.HasThreadAccess || string.IsNullOrEmpty(iconString))
+        {
+            return false;
+        }
+
+        try
+        {
+            var glyphKind = FontIconGlyphClassifier.Classify(iconString);
+            if (glyphKind is FontIconGlyphKind.Invalid or FontIconGlyphKind.None)
+            {
+                return false;
+            }
+
+            var family = !string.IsNullOrEmpty(fontFamily)
+                ? fontFamily
+                : glyphKind switch
+                {
+                    FontIconGlyphKind.FluentSymbol => "Segoe Fluent Icons, Segoe MDL2 Assets",
+                    FontIconGlyphKind.Emoji => "Segoe UI Emoji, Segoe UI",
+                    _ => "Segoe UI",
+                };
+
+            var scaledSize = iconSize.IsEmpty
+                ? iconSize
+                : new Size(iconSize.Width * scale, iconSize.Height * scale);
+            var targetSize = scaledSize.IsEmpty
+                ? DefaultIconSize
+                : (int)Math.Max(scaledSize.Width, scaledSize.Height);
+
+            result = new FontIconSource
+            {
+                FontFamily = new FontFamily(family),
+                FontSize = targetSize,
+                Glyph = iconString,
+            };
+            return true;
+        }
+        catch
+        {
+            // The general converter has its own fallback behavior. Let it handle any
+            // input that cannot be represented by this narrow glyph fast path.
+            result = null;
+            return false;
         }
     }
 
