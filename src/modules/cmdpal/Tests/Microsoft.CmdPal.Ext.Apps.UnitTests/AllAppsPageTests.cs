@@ -6,6 +6,7 @@ using System;
 using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.CmdPal.Ext.Apps.Programs;
+using Microsoft.CommandPalette.Extensions.Toolkit;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace Microsoft.CmdPal.Ext.Apps.UnitTests;
@@ -131,5 +132,47 @@ public class AllAppsPageTests : AppsTestBase
         {
             AllAppsSettings.Instance.Settings.Update("{\"apps.HideAppDescriptions\": \"false\"}");
         }
+    }
+
+    [TestMethod]
+    public void AppListItem_DefersWin32RowAndHeroIconsToUiLoader()
+    {
+        var app = new AppItem
+        {
+            Name = "Test App",
+            IcoPath = "C:\\Windows\\System32\\shell32.dll,1",
+            ExePath = "C:\\Program Files\\Example\\app.exe",
+        };
+
+        var item = new AppListItem(app, useThumbnails: true);
+
+        var rowIcon = (IconInfo)item.Icon!;
+        Assert.AreEqual("|AppIcon|C:\\Windows\\System32\\shell32.dll,1", rowIcon.Light.Icon);
+        Assert.AreSame(rowIcon, item.Command.Icon);
+
+        var details = (Details)item.Details!;
+        var heroIcon = (IconInfo)details.HeroImage;
+        Assert.AreEqual("|JumboAppIcon|C:\\Windows\\System32\\shell32.dll,1", heroIcon.Light.Icon);
+    }
+
+    [TestMethod]
+    public void AppListItem_KeepsPackagedIconAssetsAsDirectPaths()
+    {
+        var app = new AppItem
+        {
+            Name = "Test Packaged App",
+            IcoPath = "C:\\Program Files\\WindowsApps\\Example\\small.png",
+            JumboIconPath = "C:\\Program Files\\WindowsApps\\Example\\large.png",
+            IsPackaged = true,
+        };
+
+        var item = new AppListItem(app, useThumbnails: true);
+
+        var rowIcon = (IconInfo)item.Icon!;
+        Assert.AreEqual(app.IcoPath, rowIcon.Light.Icon);
+
+        var details = (Details)item.Details!;
+        var heroIcon = (IconInfo)details.HeroImage;
+        Assert.AreEqual(app.JumboIconPath, heroIcon.Light.Icon);
     }
 }

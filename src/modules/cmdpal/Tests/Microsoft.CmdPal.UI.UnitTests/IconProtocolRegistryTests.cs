@@ -12,6 +12,26 @@ namespace Microsoft.CmdPal.UI.UnitTests;
 public class IconProtocolRegistryTests
 {
     [DataTestMethod]
+    [DataRow("|AppIcon|C:\\Windows\\notepad.exe")]
+    [DataRow("|JumboAppIcon|C:\\Windows\\notepad.exe")]
+    public void BuiltInRegistryFindsAppIconProcessor(string value)
+    {
+        var processor = IconProtocolRegistry.Find(value);
+
+        Assert.IsNotNull(processor);
+        Assert.AreSame(AppIconProtocolProcessor.Instance, processor);
+        Assert.AreEqual(IconCachePartition.Other, processor.CachePartition);
+        Assert.AreEqual(IconLoadInputKind.SpecializedAppIcon, processor.ClassifyInput(value));
+        Assert.AreEqual(ElementTheme.Default, processor.GetCacheTheme(value, ElementTheme.Dark));
+        Assert.IsFalse(processor.TryPrepareSynchronously(
+            value,
+            20,
+            ElementTheme.Dark,
+            out var preparedIcon));
+        Assert.IsNull(preparedIcon);
+    }
+
+    [DataTestMethod]
     [DataRow(null)]
     [DataRow("")]
     [DataRow("\uE700")]
