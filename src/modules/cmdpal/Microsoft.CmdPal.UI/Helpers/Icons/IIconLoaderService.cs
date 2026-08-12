@@ -1,7 +1,8 @@
-﻿// Copyright (c) Microsoft Corporation
+// Copyright (c) Microsoft Corporation
 // The Microsoft Corporation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.Foundation;
 using Windows.Storage.Streams;
@@ -23,6 +24,7 @@ internal interface IIconLoaderService : IAsyncDisposable
         IRandomAccessStreamReference? streamRef,
         Size iconSize,
         double scale,
+        ElementTheme theme,
         TaskCompletionSource<IconSource?> tcs,
         IconLoadPriority priority,
         IconLoadMeasurement? diagnostics = null,
