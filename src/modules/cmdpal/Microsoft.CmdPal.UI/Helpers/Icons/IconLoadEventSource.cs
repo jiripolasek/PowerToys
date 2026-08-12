@@ -217,4 +217,10 @@ internal sealed partial class IconLoadEventSource : EventSource
     {
         WriteEvent(37, sessionId, elapsedMicroseconds);
     }
+
+    [Event(38, Level = EventLevel.Informational)]
+    public void SpeculativeDispatchDeferralCompleted(long sessionId, long elapsedMicroseconds)
+    {
+        WriteEvent(38, sessionId, elapsedMicroseconds);
+    }
 }

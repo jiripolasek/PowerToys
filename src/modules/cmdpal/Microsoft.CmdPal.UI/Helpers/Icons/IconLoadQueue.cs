@@ -27,6 +27,7 @@ internal sealed class IconLoadQueue
     private readonly Queue<IconLoadDiagnostics.SchedulerCommandMeasurement?> _availableWorkerMeasurements = new();
     private readonly TaskCompletionSource<bool> _schedulerCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly Thread _schedulerThread;
+    private readonly int _workerSlotsReservedForDemand;
     private readonly int _workerCount;
 
     private int _accepting = 1;
@@ -39,11 +40,16 @@ internal sealed class IconLoadQueue
     private int _availableWorkerSlots;
     private bool _completionRequested;
     private IconLoadDiagnostics.DemandedIdleCapacityMeasurement? _demandedIdleCapacityMeasurement;
+    private IconLoadDiagnostics.SpeculativeDispatchDeferralMeasurement? _speculativeDispatchDeferralMeasurement;
 
     public IconLoadQueue(int workerCount)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(workerCount, 1);
         _workerCount = workerCount;
+
+        // Keep one consumer waiting for live demand while only speculative work is
+        // queued. A single-worker queue must still make progress.
+        _workerSlotsReservedForDemand = workerCount > 1 ? 1 : 0;
         _readyWork = Channel.CreateUnbounded<Func<Task>>(new UnboundedChannelOptions
         {
             SingleReader = false,
@@ -236,9 +242,12 @@ internal sealed class IconLoadQueue
 
                     command.Measurement?.Processed();
                     Apply(command);
-                    if (command.Measurement is not null || _demandedIdleCapacityMeasurement is not null)
+                    if (command.Measurement is not null
+                        || _demandedIdleCapacityMeasurement is not null
+                        || _speculativeDispatchDeferralMeasurement is not null)
                     {
                         UpdateDemandedIdleCapacityMeasurement();
+                        UpdateSpeculativeDispatchDeferralMeasurement();
                     }
                 }
 
@@ -248,6 +257,10 @@ internal sealed class IconLoadQueue
                 {
                     UpdateDemandedIdleCapacityMeasurement();
                 }
+
+                // Dispatch can consume the last non-reserved slot and begin a
+                // deferral interval without another command changing state.
+                UpdateSpeculativeDispatchDeferralMeasurement();
 
                 if (measureBatch)
                 {
@@ -276,6 +289,7 @@ internal sealed class IconLoadQueue
             try
             {
                 CompleteDemandedIdleCapacityMeasurement();
+                CompleteSpeculativeDispatchDeferralMeasurement();
                 ReleaseQueuedItems();
             }
             catch (Exception ex)
@@ -359,7 +373,7 @@ internal sealed class IconLoadQueue
     private int DispatchAvailableWorkers()
     {
         var dispatchedWorkItemCount = 0;
-        while (_availableWorkerSlots > 0 && RemoveNext() is { } item)
+        while (CanDispatchNextWorkItem() && RemoveNext() is { } item)
         {
             _availableWorkerSlots--;
             dispatchedWorkItemCount++;
@@ -378,6 +392,24 @@ internal sealed class IconLoadQueue
         }
 
         return dispatchedWorkItemCount;
+    }
+
+    private bool CanDispatchNextWorkItem()
+    {
+        if (_availableWorkerSlots == 0)
+        {
+            return false;
+        }
+
+        if (_demandedHigh.Count != 0 || _demandedLow.Count != 0)
+        {
+            return true;
+        }
+
+        // Speculative work uses at most workerCount - 1 consumers. Because a
+        // consumer publishes WorkerReady only after its previous load completes,
+        // retaining this slot also bounds the number of active speculative loads.
+        return _availableWorkerSlots > _workerSlotsReservedForDemand;
     }
 
     private void UpdateDemandedIdleCapacityMeasurement()
@@ -409,6 +441,42 @@ internal sealed class IconLoadQueue
     {
         _demandedIdleCapacityMeasurement?.Complete();
         _demandedIdleCapacityMeasurement = null;
+    }
+
+    private void UpdateSpeculativeDispatchDeferralMeasurement()
+    {
+        var speculativeQueueDepth = _speculativeHigh.Count + _speculativeLow.Count;
+        var reserveIsDeferringWork = _workerSlotsReservedForDemand > 0
+            && _availableWorkerSlots > 0
+            && _availableWorkerSlots <= _workerSlotsReservedForDemand
+            && _demandedHigh.Count == 0
+            && _demandedLow.Count == 0
+            && speculativeQueueDepth > 0;
+        if (!reserveIsDeferringWork)
+        {
+            CompleteSpeculativeDispatchDeferralMeasurement();
+            return;
+        }
+
+        if (_speculativeDispatchDeferralMeasurement is null
+            || !_speculativeDispatchDeferralMeasurement.IsForActiveSession)
+        {
+            CompleteSpeculativeDispatchDeferralMeasurement();
+            _speculativeDispatchDeferralMeasurement = IconLoadDiagnostics.BeginSpeculativeDispatchDeferral(
+                speculativeQueueDepth,
+                _availableWorkerSlots);
+            return;
+        }
+
+        _speculativeDispatchDeferralMeasurement.Observe(
+            speculativeQueueDepth,
+            _availableWorkerSlots);
+    }
+
+    private void CompleteSpeculativeDispatchDeferralMeasurement()
+    {
+        _speculativeDispatchDeferralMeasurement?.Complete();
+        _speculativeDispatchDeferralMeasurement = null;
     }
 
     // Strict order by design: speculative work may starve while demanded work keeps

@@ -171,6 +171,21 @@ internal static class IconLoadDiagnostics
         return new DemandedIdleCapacityMeasurement(session, startedAt);
     }
 
+    internal static SpeculativeDispatchDeferralMeasurement? BeginSpeculativeDispatchDeferral(
+        int speculativeQueueDepth,
+        int reservedWorkerSlots)
+    {
+        var session = Volatile.Read(ref _activeSession);
+        if (session is null)
+        {
+            return null;
+        }
+
+        var startedAt = Stopwatch.GetTimestamp();
+        session.RecordSpeculativeDispatchDeferralStarted(speculativeQueueDepth, reservedWorkerSlots);
+        return new SpeculativeDispatchDeferralMeasurement(session, startedAt);
+    }
+
     private static IconLoadInputKind ClassifyInput(string? iconString, bool hasStream)
     {
         if (!string.IsNullOrEmpty(iconString))
@@ -336,6 +351,34 @@ internal static class IconLoadDiagnostics
             if (Interlocked.Exchange(ref _completed, 1) == 0)
             {
                 _session.RecordDemandedIdleCapacityCompleted(Stopwatch.GetTimestamp() - _startedAt);
+            }
+        }
+    }
+
+    internal sealed class SpeculativeDispatchDeferralMeasurement
+    {
+        private readonly IconLoadDiagnosticsSession _session;
+        private readonly long _startedAt;
+        private int _completed;
+
+        public SpeculativeDispatchDeferralMeasurement(IconLoadDiagnosticsSession session, long startedAt)
+        {
+            _session = session;
+            _startedAt = startedAt;
+        }
+
+        public bool IsForActiveSession => ReferenceEquals(_session, Volatile.Read(ref _activeSession));
+
+        public void Observe(int speculativeQueueDepth, int reservedWorkerSlots)
+        {
+            _session.RecordSpeculativeDispatchDeferralObserved(speculativeQueueDepth, reservedWorkerSlots);
+        }
+
+        public void Complete()
+        {
+            if (Interlocked.Exchange(ref _completed, 1) == 0)
+            {
+                _session.RecordSpeculativeDispatchDeferralCompleted(Stopwatch.GetTimestamp() - _startedAt);
             }
         }
     }
