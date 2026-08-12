@@ -2,6 +2,7 @@
 // The Microsoft Corporation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
+using System.Diagnostics;
 using System.Diagnostics.Tracing;
 using Microsoft.CmdPal.UI.Controls;
 using Microsoft.CmdPal.UI.Helpers;
@@ -38,9 +39,15 @@ public class IconLoadDiagnosticsTests
         load.WorkerStarted();
         var preparationStartedAt = load.BeginBackgroundPreparation();
         load.CompleteBackgroundPreparation(preparationStartedAt);
-        var dispatcherEnqueuedAt = load.BeginDispatcherWait();
-        var dispatcherStartedAt = load.DispatcherStarted(dispatcherEnqueuedAt);
-        load.DispatcherCompleted(dispatcherStartedAt);
+        var dispatcherEnqueuedAt = load.BeginDispatcherWait(
+            IconDispatcherMaterializationKind.Binary,
+            isDemanded: true);
+        var dispatcherStartedAt = load.DispatcherStarted(dispatcherEnqueuedAt, isDemanded: true);
+        load.DispatcherUiSliceCompleted(
+            dispatcherStartedAt,
+            IconDispatcherUiSliceKind.SynchronousCallback,
+            isDemanded: true);
+        load.DispatcherCompleted(dispatcherStartedAt, isDemanded: true);
         load.SetResult(null);
         load.Complete();
         request.Complete(IconRequestStatus.Stale);
@@ -72,6 +79,9 @@ public class IconLoadDiagnosticsTests
         StringAssert.Contains(report.Text, "Empty: 1");
         StringAssert.Contains(report.Text, "Maximum low queue depth: 1");
         StringAssert.Contains(report.Text, "Dispatcher wait: count=1");
+        StringAssert.Contains(report.Text, "Dispatcher materialization");
+        StringAssert.Contains(report.Text, "Measured STA execution slices: count=1");
+        StringAssert.Contains(report.Text, "    Binary");
         StringAssert.Contains(report.Text, "Load demand");
         StringAssert.Contains(report.Text, "Requests linked to session loads: 1");
         StringAssert.Contains(report.Text, "    Completed: 1");
@@ -87,6 +97,68 @@ public class IconLoadDiagnosticsTests
         var reports = IconLoadDiagnostics.GetReports();
         Assert.HasCount(1, reports);
         Assert.AreSame(report, reports[0]);
+    }
+
+    [TestMethod]
+    public void DispatcherReportSeparatesUiExecutionFromAsyncSuspension()
+    {
+        IconLoadDiagnostics.Start();
+        var request = IconLoadDiagnostics.BeginRequest(IconRequestReason.SourceChanged, 1.0);
+        var load = IconLoadDiagnostics.CreateLoad(
+            request,
+            "bitmap.png",
+            hasStream: false,
+            width: 20,
+            height: 20,
+            scale: 1.0);
+
+        Assert.IsNotNull(load);
+        request.RecordProviderResolution(IconProviderResolution.NewLoad, load);
+        load.Enqueued(IconLoadPriority.Low);
+        load.WorkerStarted();
+        var dispatcherEnqueuedAt = load.BeginDispatcherWait(
+            IconDispatcherMaterializationKind.BitmapStream,
+            isDemanded: false);
+        var dispatcherStartedAt = load.DispatcherStarted(dispatcherEnqueuedAt, isDemanded: true);
+        var artificialOutlierStart = Stopwatch.GetTimestamp() - (Stopwatch.Frequency / 50);
+        _ = load.DispatcherUiSliceCompleted(
+            artificialOutlierStart,
+            IconDispatcherUiSliceKind.BeforeAsyncSuspension,
+            isDemanded: true);
+        var continuationStartedAt = load.DispatcherAsyncSuspensionCompleted(
+            artificialOutlierStart,
+            isDemanded: false);
+        load.DispatcherUiSliceCompleted(
+            continuationStartedAt,
+            IconDispatcherUiSliceKind.AsyncContinuation,
+            isDemanded: false);
+        load.DispatcherCompleted(dispatcherStartedAt, isDemanded: false);
+        load.SetResult(null);
+        load.Complete();
+        request.Complete(IconRequestStatus.Applied);
+
+        var report = IconLoadDiagnostics.StopAndCreateReport();
+
+        Assert.IsNotNull(report);
+        var dispatcherReport = GetTextBetween(
+            report.Text,
+            "Dispatcher materialization",
+            "Scheduler coordination");
+        StringAssert.Contains(dispatcherReport, "Callback wall time includes asynchronous suspension; it is worker-slot occupancy, not STA CPU time.");
+        StringAssert.Contains(dispatcherReport, "    Enqueued demanded: 0");
+        StringAssert.Contains(dispatcherReport, "    Enqueued speculative: 1");
+        StringAssert.Contains(dispatcherReport, "    Callbacks started demanded: 1");
+        StringAssert.Contains(dispatcherReport, "    Callbacks completed speculative: 1");
+        StringAssert.Contains(dispatcherReport, "    Measured STA execution slices: count=2");
+        StringAssert.Contains(dispatcherReport, "    Asynchronous materialization suspension: count=1");
+        StringAssert.Contains(dispatcherReport, "    BitmapStream");
+        StringAssert.Contains(dispatcherReport, "      Speculative timing");
+        StringAssert.Contains(dispatcherReport, "      Demanded timing");
+        StringAssert.Contains(dispatcherReport, "phase=UiEntry");
+        StringAssert.Contains(dispatcherReport, "phase=AsyncSuspension");
+        StringAssert.Contains(dispatcherReport, "materialization=BitmapStream");
+        StringAssert.Contains(dispatcherReport, "demand=Demanded");
+        StringAssert.Contains(dispatcherReport, "demand=Speculative");
     }
 
     [TestMethod]

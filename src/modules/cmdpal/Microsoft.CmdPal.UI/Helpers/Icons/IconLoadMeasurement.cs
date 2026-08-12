@@ -16,6 +16,10 @@ namespace Microsoft.CmdPal.UI.Helpers;
 
 internal sealed class IconLoadMeasurement
 {
+    private const int DispatcherWaitingState = 1;
+    private const int DispatcherCallbackState = 2;
+    private const int DispatcherCompletedState = 3;
+
     private readonly long _createdAt = Stopwatch.GetTimestamp();
     private long _enqueuedAt;
     private int _queuePriority;
@@ -23,6 +27,9 @@ internal sealed class IconLoadMeasurement
     private int _started;
     private int _completed;
     private int _resultKind;
+    private int _dispatcherState;
+    private int _dispatcherMaterializationKind;
+    private int _dispatcherDemandAtEnqueue;
 
     internal IconLoadDiagnosticsSession Session { get; }
 
@@ -82,18 +89,107 @@ internal sealed class IconLoadMeasurement
         Session.RecordBackgroundPreparation(Id, InputKind, Stopwatch.GetTimestamp() - startedAt);
     }
 
-    public long BeginDispatcherWait() => Stopwatch.GetTimestamp();
-
-    public long DispatcherStarted(long enqueuedAt)
+    public long BeginDispatcherWait(
+        IconDispatcherMaterializationKind materializationKind = IconDispatcherMaterializationKind.Unknown,
+        bool isDemanded = true)
     {
         var now = Stopwatch.GetTimestamp();
-        Session.RecordDispatcherWait(Id, InputKind, now - enqueuedAt);
+        Volatile.Write(ref _dispatcherMaterializationKind, (int)materializationKind);
+        Volatile.Write(ref _dispatcherDemandAtEnqueue, isDemanded ? 1 : 0);
+        if (Interlocked.CompareExchange(ref _dispatcherState, DispatcherWaitingState, 0) == 0)
+        {
+            Session.RecordDispatcherEnqueued(Id, InputKind, materializationKind, isDemanded);
+        }
+
         return now;
     }
 
-    public void DispatcherCompleted(long startedAt)
+    public long DispatcherStarted(long enqueuedAt, bool isDemanded = true)
     {
-        Session.RecordDispatcherWork(Id, InputKind, Stopwatch.GetTimestamp() - startedAt);
+        var now = Stopwatch.GetTimestamp();
+        if (Interlocked.CompareExchange(
+                ref _dispatcherState,
+                DispatcherCallbackState,
+                DispatcherWaitingState) == DispatcherWaitingState)
+        {
+            Session.RecordDispatcherWait(
+                Id,
+                InputKind,
+                (IconDispatcherMaterializationKind)Volatile.Read(ref _dispatcherMaterializationKind),
+                isDemanded,
+                enqueuedAt,
+                now - enqueuedAt);
+        }
+
+        // Start callback-wall and UI-slice timing after recording the queue-wait
+        // sample so diagnostics bookkeeping is not attributed to materialization.
+        return Stopwatch.GetTimestamp();
+    }
+
+    public long DispatcherUiSliceCompleted(
+        long startedAt,
+        IconDispatcherUiSliceKind sliceKind,
+        bool isDemanded)
+    {
+        var now = Stopwatch.GetTimestamp();
+        Session.RecordDispatcherUiSlice(
+            Id,
+            InputKind,
+            (IconDispatcherMaterializationKind)Volatile.Read(ref _dispatcherMaterializationKind),
+            sliceKind,
+            isDemanded,
+            startedAt,
+            now - startedAt);
+        return Stopwatch.GetTimestamp();
+    }
+
+    public long DispatcherAsyncSuspensionCompleted(long startedAt, bool isDemanded)
+    {
+        var now = Stopwatch.GetTimestamp();
+        Session.RecordDispatcherAsyncSuspension(
+            Id,
+            InputKind,
+            (IconDispatcherMaterializationKind)Volatile.Read(ref _dispatcherMaterializationKind),
+            isDemanded,
+            startedAt,
+            now - startedAt);
+        return Stopwatch.GetTimestamp();
+    }
+
+    public void DispatcherCompleted(long startedAt, bool isDemanded = true)
+    {
+        var now = Stopwatch.GetTimestamp();
+        if (Interlocked.CompareExchange(
+                ref _dispatcherState,
+                DispatcherCompletedState,
+                DispatcherCallbackState) == DispatcherCallbackState)
+        {
+            Session.RecordDispatcherWork(
+                Id,
+                InputKind,
+                (IconDispatcherMaterializationKind)Volatile.Read(ref _dispatcherMaterializationKind),
+                isDemanded,
+                startedAt,
+                now - startedAt);
+        }
+    }
+
+    public void DispatcherWaitFailed(long enqueuedAt)
+    {
+        var now = Stopwatch.GetTimestamp();
+        if (Interlocked.CompareExchange(
+                ref _dispatcherState,
+                DispatcherCompletedState,
+                DispatcherWaitingState) == DispatcherWaitingState)
+        {
+            Session.RecordDispatcherWaitFailed(
+                Id,
+                InputKind,
+                (IconDispatcherMaterializationKind)Volatile.Read(ref _dispatcherMaterializationKind),
+                Volatile.Read(ref _dispatcherDemandAtEnqueue) != 0,
+                enqueuedAt,
+                now - enqueuedAt);
+        }
     }
 
     public void SetResult(IconSource? result)

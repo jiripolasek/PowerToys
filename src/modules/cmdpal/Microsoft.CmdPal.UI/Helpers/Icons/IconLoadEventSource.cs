@@ -212,6 +212,35 @@ internal sealed partial class IconLoadEventSource : EventSource
             passMicroseconds);
     }
 
+    [Event(34, Level = EventLevel.Warning)]
+    public void DispatcherWaitFailed(long sessionId, long loadId, long elapsedMicroseconds)
+    {
+        WriteEvent(34, sessionId, loadId, elapsedMicroseconds);
+    }
+
+    [Event(35, Level = EventLevel.Informational)]
+    public void DispatcherUiSliceCompleted(
+        long sessionId,
+        long loadId,
+        int materializationKind,
+        int sliceKind,
+        bool isDemanded,
+        long elapsedMicroseconds)
+    {
+        WriteEvent(35, sessionId, loadId, materializationKind, sliceKind, isDemanded, elapsedMicroseconds);
+    }
+
+    [Event(36, Level = EventLevel.Informational)]
+    public void DispatcherAsyncSuspensionCompleted(
+        long sessionId,
+        long loadId,
+        int materializationKind,
+        bool isDemanded,
+        long elapsedMicroseconds)
+    {
+        WriteEvent(36, sessionId, loadId, materializationKind, isDemanded, elapsedMicroseconds);
+    }
+
     [Event(37, Level = EventLevel.Informational)]
     public void UiResponsivenessProbeCompleted(long sessionId, long elapsedMicroseconds)
     {
