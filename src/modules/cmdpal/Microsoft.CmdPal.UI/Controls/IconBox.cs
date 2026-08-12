@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation
+// Copyright (c) Microsoft Corporation
 // The Microsoft Corporation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -20,6 +20,7 @@ public partial class IconBox : ContentControl
 {
     private const double DefaultIconFontSize = 16.0;
     private static long _nextDiagnosticId;
+    private readonly IconPresentationState<IconSource> _presentation = new();
 
     private double _lastScale;
     private ElementTheme _lastTheme;
@@ -29,6 +30,7 @@ public partial class IconBox : ContentControl
     private IconRequestReason _refreshReason;
     private IconRequestMeasurement _activeRequestDiagnostics;
     private IIconRequestDemand? _activeRequestDemand;
+    private bool _resolvedSourceExpectsImage;
     private long _diagnosticId;
     private IconRequestSite _derivedRequestSite;
     private bool _hasDerivedRequestSite;
@@ -56,6 +58,33 @@ public partial class IconBox : ContentControl
     // Using a DependencyProperty as the backing store for Source.  This enables animation, styling, binding, etc...
     public static readonly DependencyProperty SourceProperty =
         DependencyProperty.Register(nameof(Source), typeof(IconSource), typeof(IconBox), new PropertyMetadata(null, OnSourcePropertyChanged));
+
+    /// <summary>
+    /// Gets or sets the source displayed while <see cref="SourceKey"/> is being resolved or cannot produce an icon.
+    /// A placement fallback takes precedence over a fallback supplied by the source provider.
+    /// </summary>
+    public IconSource? FallbackSource
+    {
+        get => (IconSource?)GetValue(FallbackSourceProperty);
+        set => SetValue(FallbackSourceProperty, value);
+    }
+
+    public static readonly DependencyProperty FallbackSourceProperty =
+        DependencyProperty.Register(nameof(FallbackSource), typeof(IconSource), typeof(IconBox), new PropertyMetadata(null, OnFallbackSourcePropertyChanged));
+
+    /// <summary>
+    /// Gets or sets a value indicating whether an image-oriented request that resolves to a
+    /// font icon should use <see cref="FallbackSource"/> instead. This is intended for image
+    /// placements, such as application hero images, where a glyph is not appropriate.
+    /// </summary>
+    public bool PreferFallbackSourceForFontIcons
+    {
+        get => (bool)GetValue(PreferFallbackSourceForFontIconsProperty);
+        set => SetValue(PreferFallbackSourceForFontIconsProperty, value);
+    }
+
+    public static readonly DependencyProperty PreferFallbackSourceForFontIconsProperty =
+        DependencyProperty.Register(nameof(PreferFallbackSourceForFontIcons), typeof(bool), typeof(IconBox), new PropertyMetadata(false, OnPreferFallbackSourceForFontIconsPropertyChanged));
 
     /// <summary>
     /// Gets or sets a value to use as the <see cref="SourceKey"/> to retrieve an <see cref="IconSource"/> to set as the <see cref="Source"/>.
@@ -441,6 +470,28 @@ public partial class IconBox : ContentControl
         }
     }
 
+    private static void OnFallbackSourcePropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is not IconBox self)
+        {
+            return;
+        }
+
+        self._presentation.PlacementFallback = e.NewValue as IconSource;
+        if (self.SourceKey is not null)
+        {
+            self.UpdatePresentedSource();
+        }
+    }
+
+    private static void OnPreferFallbackSourceForFontIconsPropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is IconBox self && self.SourceKey is not null)
+        {
+            self.UpdatePresentedSource();
+        }
+    }
+
     private static void OnSourceKeyPropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         if (d is not IconBox self)
@@ -449,6 +500,8 @@ public partial class IconBox : ContentControl
         }
 
         self.AdvanceRequestVersion();
+        self._presentation.BeginSourceChange();
+        self._resolvedSourceExpectsImage = false;
 
         if (e.NewValue is null)
         {
@@ -458,6 +511,9 @@ public partial class IconBox : ContentControl
             return;
         }
 
+        // A recycled IconBox must stop presenting the preceding item's icon before
+        // the replacement request has a chance to yield or enter the load queue.
+        self.UpdatePresentedSource();
         self._needsRefresh = true;
         self._refreshReason |= IconRequestReason.SourceChanged;
         self.Refresh();
@@ -487,7 +543,13 @@ public partial class IconBox : ContentControl
                 Diagnostics = diagnostics,
             };
             iconBox.TrackActiveRequest(requestVersion, diagnostics, eventArgs);
-            await sourceRequested.InvokeAsync(iconBox, eventArgs);
+            var invocation = sourceRequested.InvokeAsync(iconBox, eventArgs);
+            if (!invocation.IsCompleted)
+            {
+                iconBox.SetRequestFallback(requestVersion, sourceKey, eventArgs.FallbackSource);
+            }
+
+            await invocation;
 
             // After the await:
             // Is the icon we're looking up now, the one we still
@@ -502,7 +564,10 @@ public partial class IconBox : ContentControl
                 return;
             }
 
-            iconBox.Source = eventArgs.Value;
+            iconBox._presentation.SetRequestFallback(eventArgs.FallbackSource);
+            iconBox._presentation.SetResolvedSource(eventArgs.Value);
+            iconBox._resolvedSourceExpectsImage = eventArgs.ExpectsImageSource;
+            iconBox.UpdatePresentedSource();
             diagnostics.Complete(
                 eventArgs.Value is null ? IconRequestStatus.Empty : IconRequestStatus.Applied,
                 eventArgs.Value);
@@ -528,5 +593,30 @@ public partial class IconBox : ContentControl
                 iconBox.ClearActiveRequest(requestVersion, eventArgs);
             }
         }
+    }
+
+    private void SetRequestFallback(long requestVersion, object sourceKey, IconSource? fallbackSource)
+    {
+        if (requestVersion != _requestVersion || !ReferenceEquals(sourceKey, SourceKey))
+        {
+            return;
+        }
+
+        _presentation.SetRequestFallback(fallbackSource);
+        UpdatePresentedSource();
+    }
+
+    private void UpdatePresentedSource()
+    {
+        var resolvedSource = _presentation.ResolvedSource;
+
+        // Replacing a valid glyph requires both opt-ins: the placement must prefer
+        // an image fallback, and the provider must identify this as an image request.
+        // This keeps app hero images image-only without replacing emoji or other glyph heroes.
+        var preferFallback = resolvedSource is null
+            || (PreferFallbackSourceForFontIcons && _resolvedSourceExpectsImage && resolvedSource is FontIconSource)
+            || resolvedSource is BitmapIconSource { UriSource: null }
+            || resolvedSource is ImageIconSource { ImageSource: null };
+        Source = _presentation.SelectSource(preferFallback);
     }
 }
