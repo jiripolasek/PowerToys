@@ -170,4 +170,10 @@ internal sealed partial class IconLoadEventSource : EventSource
             workerCount,
             demandedBeyondCapacity);
     }
+
+    [Event(37, Level = EventLevel.Informational)]
+    public void UiResponsivenessProbeCompleted(long sessionId, long elapsedMicroseconds)
+    {
+        WriteEvent(37, sessionId, elapsedMicroseconds);
+    }
 }

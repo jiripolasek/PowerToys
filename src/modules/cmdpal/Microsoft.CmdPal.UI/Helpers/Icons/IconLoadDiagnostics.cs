@@ -9,6 +9,7 @@ using System.Globalization;
 using System.Text;
 using ManagedCommon;
 using Microsoft.CmdPal.UI.Controls;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
 
@@ -33,9 +34,11 @@ internal static class IconLoadDiagnostics
         }
     }
 
-    public static long Start()
+    public static long Start(DispatcherQueue? dispatcherQueue = null)
     {
-        var session = new IconLoadDiagnosticsSession(Interlocked.Increment(ref _nextSessionId));
+        var session = new IconLoadDiagnosticsSession(
+            Interlocked.Increment(ref _nextSessionId),
+            dispatcherQueue);
         Interlocked.Exchange(ref _activeSession, session)?.Stop();
         return session.Id;
     }

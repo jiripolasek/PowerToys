@@ -56,6 +56,10 @@ public class IconLoadDiagnosticsTests
         Assert.IsTrue(report.Duration >= TimeSpan.Zero);
         StringAssert.Contains(report.Text, $"Session: {sessionId}");
         StringAssert.Contains(report.Text, "Ended UTC:");
+        StringAssert.Contains(report.Text, "Process work during session");
+        StringAssert.Contains(report.Text, "Managed allocations:");
+        StringAssert.Contains(report.Text, "UI responsiveness probe");
+        StringAssert.Contains(report.Text, "  Enabled: no");
         StringAssert.Contains(report.Text, "Started: 1");
         StringAssert.Contains(report.Text, "Stale: 1");
         StringAssert.Contains(report.Text, "NewLoad: 1");
