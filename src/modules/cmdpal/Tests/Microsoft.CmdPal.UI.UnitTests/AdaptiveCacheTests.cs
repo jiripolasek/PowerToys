@@ -16,6 +16,39 @@ namespace Microsoft.CmdPal.UI.UnitTests;
 public class AdaptiveCacheTests
 {
     [TestMethod]
+    [Timeout(5_000)]
+    public async Task LookupOverlappingEvictionDoesNotObserveAnotherKeysValue()
+    {
+        using var comparisonStarted = new ManualResetEventSlim();
+        using var continueComparison = new ManualResetEventSlim();
+        var cache = new AdaptiveCache<BlockingKey, int>(capacity: 4, decayInterval: TimeSpan.FromHours(1));
+        cache.Add(new BlockingKey(1), 101);
+
+        var lookup = Task.Run(() =>
+        {
+            var found = cache.TryGet(
+                new BlockingKey(1, comparisonStarted, continueComparison),
+                out var value);
+            return (Found: found, Value: value);
+        });
+
+        Assert.IsTrue(comparisonStarted.Wait(TimeSpan.FromSeconds(2)), "The lookup did not reach its key comparison.");
+        try
+        {
+            Assert.IsTrue(cache.TryRemove(new BlockingKey(1)));
+            cache.Add(new BlockingKey(2), 202);
+        }
+        finally
+        {
+            continueComparison.Set();
+        }
+
+        var result = await lookup;
+        Assert.IsTrue(result.Found);
+        Assert.AreEqual(101, result.Value);
+    }
+
+    [TestMethod]
     public void ApproximateCountChangesOnlyForSuccessfulMutations()
     {
         var cache = new AdaptiveCache<int, int>(capacity: 8);
@@ -35,6 +68,36 @@ public class AdaptiveCacheTests
 
         cache.Clear();
         Assert.AreEqual(0, cache.ApproximateCount);
+    }
+
+    [TestMethod]
+    [Timeout(5_000)]
+    public void RemovalCallbackReportsReasonValueAndRemainingCount()
+    {
+        var removals = new ConcurrentQueue<(int Key, int Value, AdaptiveCacheRemovalReason Reason, int Count, int Capacity)>();
+        var cache = new AdaptiveCache<int, int>(
+            capacity: 1,
+            decayInterval: TimeSpan.FromHours(1),
+            removalCallback: (key, value, reason, count, capacity) =>
+                removals.Enqueue((key, value, reason, count, capacity)));
+
+        cache.Add(1, 101);
+        cache.Add(2, 202);
+
+        Assert.IsTrue(
+            SpinWait.SpinUntil(
+                () => removals.Any(removal => removal.Reason == AdaptiveCacheRemovalReason.Capacity),
+                TimeSpan.FromSeconds(2)),
+            "Capacity removal was not reported.");
+        Assert.IsTrue(removals.TryPeek(out var capacityRemoval));
+        Assert.AreEqual(AdaptiveCacheRemovalReason.Capacity, capacityRemoval.Reason);
+        Assert.AreEqual(1, capacityRemoval.Count);
+        Assert.AreEqual(1, capacityRemoval.Capacity);
+        Assert.AreEqual(capacityRemoval.Key == 1 ? 101 : 202, capacityRemoval.Value);
+
+        var remainingKey = cache.TryGet(1, out _) ? 1 : 2;
+        Assert.IsTrue(cache.TryRemove(remainingKey));
+        Assert.IsTrue(removals.Any(removal => removal.Reason == AdaptiveCacheRemovalReason.Explicit));
     }
 
     [TestMethod]
@@ -98,5 +161,47 @@ public class AdaptiveCacheTests
         {
             Assert.IsFalse(cache.TryGet(key, out _), $"Cache still contains key {key} after Clear.");
         }
+    }
+
+    private sealed class BlockingKey : IEquatable<BlockingKey>
+    {
+        private readonly ManualResetEventSlim? _comparisonStarted;
+        private readonly ManualResetEventSlim? _continueComparison;
+
+        public int Value { get; }
+
+        public BlockingKey(
+            int value,
+            ManualResetEventSlim? comparisonStarted = null,
+            ManualResetEventSlim? continueComparison = null)
+        {
+            Value = value;
+            _comparisonStarted = comparisonStarted;
+            _continueComparison = continueComparison;
+        }
+
+        public bool Equals(BlockingKey? other)
+        {
+            if (other is null)
+            {
+                return false;
+            }
+
+            var blockingKey = _comparisonStarted is not null ? this : other;
+            if (blockingKey._comparisonStarted is not null)
+            {
+                blockingKey._comparisonStarted.Set();
+                if (blockingKey._continueComparison?.Wait(TimeSpan.FromSeconds(2)) != true)
+                {
+                    throw new TimeoutException("The cache lookup key comparison was not released.");
+                }
+            }
+
+            return Value == other.Value;
+        }
+
+        public override bool Equals(object? obj) => Equals(obj as BlockingKey);
+
+        public override int GetHashCode() => Value;
     }
 }

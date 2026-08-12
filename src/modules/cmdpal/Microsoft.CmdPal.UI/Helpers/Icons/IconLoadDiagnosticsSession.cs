@@ -13,6 +13,7 @@ using Microsoft.CmdPal.UI.Controls;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.Foundation;
 
 namespace Microsoft.CmdPal.UI.Helpers;
 
@@ -45,6 +46,7 @@ internal sealed class IconLoadDiagnosticsSession
     private readonly InputKindMeasurements[] _inputKindMeasurements = CreateInputKindMeasurements();
     private readonly ElementKindMeasurements[] _elementKindMeasurements = CreateElementKindMeasurements();
     private readonly ConcurrentDictionary<Task<IconSource?>, IconLoadMeasurement> _loadsByTask = new();
+    private readonly ConcurrentDictionary<CacheDescriptor, CacheMeasurements> _cacheMeasurements = new();
     private readonly ConcurrentDictionary<long, RequestDemandState> _requestDemandStates = new();
     private readonly ConcurrentDictionary<long, LoadDemandState> _loadDemandStates = new();
     private readonly ConcurrentDictionary<RequestOriginKey, RequestOriginMeasurements> _requestOriginMeasurements = new();
@@ -132,6 +134,25 @@ internal sealed class IconLoadDiagnosticsSession
     internal void RecordUiProbeSkipped() => Interlocked.Increment(ref _uiProbeSkipped);
 
     internal void RecordUiProbeRejected() => Interlocked.Increment(ref _uiProbeRejected);
+
+    internal void RecordCacheLookup(Size iconSize, int capacity, bool hit)
+    {
+        GetCacheMeasurements(iconSize, capacity).RecordLookup(hit);
+    }
+
+    internal void RecordCacheEntryAdded(Size iconSize, int capacity, int entryCount)
+    {
+        GetCacheMeasurements(iconSize, capacity).RecordAdded(entryCount);
+    }
+
+    internal void RecordCacheEntryRemoved(
+        Size iconSize,
+        int capacity,
+        int entryCount,
+        AdaptiveCacheRemovalReason reason)
+    {
+        GetCacheMeasurements(iconSize, capacity).RecordRemoved(entryCount, reason);
+    }
 
     public IconRequestMeasurement BeginRequest(IconRequestReason reason, double scale, IconRequestOrigin origin)
     {
@@ -658,6 +679,10 @@ internal sealed class IconLoadDiagnosticsSession
         AppendRequestMeasurements(builder);
         builder.AppendLine();
 
+        builder.AppendLine("Icon caches");
+        AppendCacheMeasurements(builder);
+        builder.AppendLine();
+
         builder.AppendLine("Request origins");
         AppendRequestOriginMeasurements(builder);
         builder.AppendLine();
@@ -766,6 +791,74 @@ internal sealed class IconLoadDiagnosticsSession
         AppendValue(builder, "Timer ticks skipped while a callback was pending", Volatile.Read(ref _uiProbeSkipped));
         AppendValue(builder, "Callbacks rejected by DispatcherQueue", rejected);
         _uiProbeWaitLatency.Append(builder, "Normal-priority queue wait");
+    }
+
+    private void AppendCacheMeasurements(StringBuilder builder)
+    {
+        builder.AppendLine("  Definition: each entry is a cached IconSource task; counts are approximate concurrent observations. Eviction only drops the cache reference.");
+        if (_cacheMeasurements.IsEmpty)
+        {
+            builder.AppendLine("  No cache activity was observed during this session.");
+            return;
+        }
+
+        var caches = _cacheMeasurements.ToArray();
+        Array.Sort(
+            caches,
+            static (left, right) =>
+            {
+                var width = left.Key.Width.CompareTo(right.Key.Width);
+                if (width != 0)
+                {
+                    return width;
+                }
+
+                var height = left.Key.Height.CompareTo(right.Key.Height);
+                return height != 0 ? height : left.Key.Capacity.CompareTo(right.Key.Capacity);
+            });
+
+        foreach (var (descriptor, measurements) in caches)
+        {
+            var snapshot = measurements.CreateSnapshot();
+            builder
+                .Append("  ")
+                .Append(descriptor.Width)
+                .Append('x')
+                .Append(descriptor.Height)
+                .Append(", capacity ")
+                .AppendLine(descriptor.Capacity.ToString(CultureInfo.InvariantCulture));
+            AppendValue(builder, "Lookups", snapshot.Hits + snapshot.Misses, "    ");
+            AppendValue(builder, "Hits", snapshot.Hits, "    ");
+            AppendValue(builder, "Misses", snapshot.Misses, "    ");
+            builder.Append("    Hit rate: ")
+                .Append(snapshot.Hits + snapshot.Misses == 0
+                    ? "n/a"
+                    : (snapshot.Hits * 100D / (snapshot.Hits + snapshot.Misses)).ToString("0.###", CultureInfo.InvariantCulture) + " %")
+                .AppendLine();
+            AppendValue(builder, "First observed entries", snapshot.FirstObservedCount, "    ");
+            AppendValue(builder, "Last observed entries", snapshot.LastObservedCount, "    ");
+            AppendValue(builder, "Maximum observed entries", snapshot.MaximumObservedCount, "    ");
+            AppendValue(builder, "Entries added during session", snapshot.EntriesAdded, "    ");
+            AppendValue(builder, "Entries removed during session", snapshot.EntriesRemoved, "    ");
+            builder.AppendLine("    Removal reasons");
+            AppendEnumCounts<AdaptiveCacheRemovalReason>(builder, snapshot.RemovalsByReason, "      ");
+        }
+    }
+
+    private CacheMeasurements GetCacheMeasurements(Size iconSize, int capacity)
+    {
+        var descriptor = new CacheDescriptor(
+            NormalizeCacheDimension(iconSize.Width),
+            NormalizeCacheDimension(iconSize.Height),
+            capacity);
+        return _cacheMeasurements.GetOrAdd(descriptor, static _ => new CacheMeasurements());
+    }
+
+    private static int NormalizeCacheDimension(double value)
+    {
+        return double.IsFinite(value) && value >= 0
+            ? (int)Math.Round(value)
+            : 0;
     }
 
     private void AppendLoadDemandMeasurements(StringBuilder builder)
@@ -1102,6 +1195,17 @@ internal sealed class IconLoadDiagnosticsSession
         return total;
     }
 
+    private static long[] SnapshotCounts(long[] values)
+    {
+        var snapshot = new long[values.Length];
+        for (var i = 0; i < values.Length; i++)
+        {
+            snapshot[i] = Volatile.Read(ref values[i]);
+        }
+
+        return snapshot;
+    }
+
     private static void UpdateMaximum(ref long maximum, long value)
     {
         var current = Volatile.Read(ref maximum);
@@ -1152,6 +1256,76 @@ internal sealed class IconLoadDiagnosticsSession
     private static long ToMicroseconds(long ticks) => (long)(ticks * 1_000_000D / Stopwatch.Frequency);
 
     private static string FormatMilliseconds(long ticks) => (ticks * 1000D / Stopwatch.Frequency).ToString("0.###", CultureInfo.InvariantCulture);
+
+    private readonly record struct CacheDescriptor(int Width, int Height, int Capacity);
+
+    private readonly record struct CacheMeasurementsSnapshot(
+        long Hits,
+        long Misses,
+        long FirstObservedCount,
+        long LastObservedCount,
+        long MaximumObservedCount,
+        long EntriesAdded,
+        long EntriesRemoved,
+        long[] RemovalsByReason);
+
+    private sealed class CacheMeasurements
+    {
+        private readonly long[] _removalsByReason = new long[Enum.GetValues<AdaptiveCacheRemovalReason>().Length];
+        private long _hits;
+        private long _misses;
+        private long _firstObservedCount = -1;
+        private long _lastObservedCount;
+        private long _maximumObservedCount;
+        private long _entriesAdded;
+        private long _entriesRemoved;
+
+        public void RecordLookup(bool hit)
+        {
+            if (hit)
+            {
+                Interlocked.Increment(ref _hits);
+            }
+            else
+            {
+                Interlocked.Increment(ref _misses);
+            }
+        }
+
+        public void RecordAdded(int entryCount)
+        {
+            RecordObservation(entryCount);
+            Interlocked.Increment(ref _entriesAdded);
+        }
+
+        public void RecordRemoved(int entryCount, AdaptiveCacheRemovalReason reason)
+        {
+            RecordObservation(entryCount);
+            Interlocked.Increment(ref _entriesRemoved);
+            Interlocked.Increment(ref _removalsByReason[(int)reason]);
+        }
+
+        public CacheMeasurementsSnapshot CreateSnapshot()
+        {
+            return new CacheMeasurementsSnapshot(
+                Volatile.Read(ref _hits),
+                Volatile.Read(ref _misses),
+                Math.Max(0, Volatile.Read(ref _firstObservedCount)),
+                Math.Max(0, Volatile.Read(ref _lastObservedCount)),
+                Math.Max(0, Volatile.Read(ref _maximumObservedCount)),
+                Volatile.Read(ref _entriesAdded),
+                Volatile.Read(ref _entriesRemoved),
+                SnapshotCounts(_removalsByReason));
+        }
+
+        private void RecordObservation(int entryCount)
+        {
+            var normalizedCount = Math.Max(0, entryCount);
+            Interlocked.CompareExchange(ref _firstObservedCount, normalizedCount, -1);
+            Interlocked.Exchange(ref _lastObservedCount, normalizedCount);
+            UpdateMaximum(ref _maximumObservedCount, normalizedCount);
+        }
+    }
 
     private readonly record struct LoadResolutionResult(
         bool TracksLiveRequester,

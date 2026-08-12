@@ -119,6 +119,39 @@ public class IconLoadDiagnosticsTests
     }
 
     [TestMethod]
+    public void CacheReportTracksLookupsOccupancyAndRemovalReasons()
+    {
+        IconLoadDiagnostics.Start();
+        var size = new global::Windows.Foundation.Size(20, 20);
+        IconLoadDiagnostics.RecordCacheLookup(size, capacity: 16, hit: false);
+        IconLoadDiagnostics.RecordCacheEntryAdded(size, capacity: 16, entryCount: 1);
+        IconLoadDiagnostics.RecordCacheLookup(size, capacity: 16, hit: true);
+        IconLoadDiagnostics.RecordCacheEntryRemoved(
+            size,
+            capacity: 16,
+            entryCount: 0,
+            AdaptiveCacheRemovalReason.Explicit);
+
+        var report = IconLoadDiagnostics.StopAndCreateReport();
+
+        Assert.IsNotNull(report);
+        var expectedHeader =
+            $"Icon caches{Environment.NewLine}" +
+            $"  Definition: each entry is a cached IconSource task; counts are approximate concurrent observations. Eviction only drops the cache reference.{Environment.NewLine}" +
+            "  20x20, capacity 16";
+        StringAssert.Contains(report.Text, expectedHeader);
+        StringAssert.Contains(report.Text, "    Lookups: 2");
+        StringAssert.Contains(report.Text, "    Hits: 1");
+        StringAssert.Contains(report.Text, "    Misses: 1");
+        StringAssert.Contains(report.Text, "    Hit rate: 50 %");
+        StringAssert.Contains(report.Text, "    Maximum observed entries: 1");
+        var expectedRemovalReason =
+            $"    Removal reasons{Environment.NewLine}" +
+            "      Explicit: 1";
+        StringAssert.Contains(report.Text, expectedRemovalReason);
+    }
+
+    [TestMethod]
     public void StaleQueuedRequestTracksRetainedCacheUse()
     {
         IconLoadDiagnostics.Start();

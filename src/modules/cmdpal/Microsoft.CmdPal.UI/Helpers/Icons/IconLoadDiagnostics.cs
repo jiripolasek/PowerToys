@@ -12,6 +12,7 @@ using Microsoft.CmdPal.UI.Controls;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media.Imaging;
+using Windows.Foundation;
 
 namespace Microsoft.CmdPal.UI.Helpers;
 
@@ -100,6 +101,29 @@ internal static class IconLoadDiagnostics
         }
 
         return session.CreateLoad(ClassifyInput(iconString, hasStream), width, height, scale);
+    }
+
+    internal static void RecordCacheLookup(Size iconSize, int capacity, bool hit)
+    {
+        Volatile.Read(ref _activeSession)?.RecordCacheLookup(iconSize, capacity, hit);
+    }
+
+    internal static void RecordCacheEntryAdded(Size iconSize, int capacity, int entryCount)
+    {
+        Volatile.Read(ref _activeSession)?.RecordCacheEntryAdded(iconSize, capacity, entryCount);
+    }
+
+    internal static void RecordCacheEntryRemoved(
+        Size iconSize,
+        int capacity,
+        int entryCount,
+        AdaptiveCacheRemovalReason reason)
+    {
+        Volatile.Read(ref _activeSession)?.RecordCacheEntryRemoved(
+            iconSize,
+            capacity,
+            entryCount,
+            reason);
     }
 
     public static long BeginElementUpdate()
