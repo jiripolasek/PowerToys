@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation
+// Copyright (c) Microsoft Corporation
 // The Microsoft Corporation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -12,6 +12,21 @@ internal sealed partial class SampleIconPage : ListPage
 {
     private readonly IListItem[] _items =
     [
+        BuildIconItem(
+            "|Swatch|#FF0067C0|#FF60CDFF|",
+            "Theme-aware generated swatch",
+            "Uses a compact color protocol instead of an extension-generated bitmap"),
+
+        BuildIconItem(
+            "|Initials|A|#FF7A3E9D|circle|",
+            "Generated circular initials avatar",
+            "Uses an automatically contrasting foreground"),
+
+        BuildIconItem(
+            "|Initials|CP|#FF005FB8|#FF60CDFF|rounded|",
+            "Theme-aware rounded initials avatar",
+            "Uses separate light and dark background colors"),
+
         /*
          * Quick intro to Unicode in source code:
          * - Every character has a code point (e.g., U+0041 = 'A').

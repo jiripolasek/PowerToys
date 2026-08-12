@@ -32,6 +32,28 @@ public class IconProtocolRegistryTests
     }
 
     [DataTestMethod]
+    [DataRow("|Swatch|#FF0067C0|", "GeneratedSwatch")]
+    [DataRow("|Initials|CP|#FF0067C0|circle|", "GeneratedInitials")]
+    public void BuiltInRegistryFindsGeneratedIconProcessor(string value, string inputKind)
+    {
+        var processor = IconProtocolRegistry.Find(value);
+
+        Assert.IsNotNull(processor);
+        Assert.AreSame(GeneratedIconProtocolProcessor.Instance, processor);
+        Assert.AreEqual(IconCachePartition.Other, processor.CachePartition);
+        Assert.AreEqual(inputKind, processor.ClassifyInput(value).ToString());
+        Assert.IsTrue(processor.TryPrepareSynchronously(
+            value,
+            20,
+            ElementTheme.Light,
+            out var preparedIcon));
+        using (preparedIcon)
+        {
+            Assert.AreEqual(IconPathConverter.PreparedIconKind.SvgData, preparedIcon.Kind);
+        }
+    }
+
+    [DataTestMethod]
     [DataRow(null)]
     [DataRow("")]
     [DataRow("\uE700")]
