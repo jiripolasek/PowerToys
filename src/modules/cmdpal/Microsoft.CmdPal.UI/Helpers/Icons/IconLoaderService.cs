@@ -47,14 +47,15 @@ internal sealed partial class IconLoaderService : IIconLoaderService
         Size iconSize,
         double scale,
         TaskCompletionSource<IconSource?> tcs,
-        IconLoadPriority priority = IconLoadPriority.Low)
+        IconLoadPriority priority = IconLoadPriority.Low,
+        IconLoadMeasurement? diagnostics = null)
     {
-        var workItem = () => LoadAndCompleteAsync(iconString, fontFamily, streamRef, iconSize, scale, tcs);
-
         if (priority == IconLoadPriority.High)
         {
-            if (_highPriorityQueue.Writer.TryWrite(workItem))
+            var highPriorityWorkItem = () => LoadAndCompleteAsync(iconString, fontFamily, streamRef, iconSize, scale, tcs, diagnostics);
+            if (_highPriorityQueue.Writer.TryWrite(highPriorityWorkItem))
             {
+                diagnostics?.Enqueued(IconLoadPriority.High);
                 return true;
             }
 
@@ -63,7 +64,15 @@ internal sealed partial class IconLoaderService : IIconLoaderService
 #endif
         }
 
-        return _lowPriorityQueue.Writer.TryWrite(workItem);
+        var lowPriorityWorkItem = () => LoadAndCompleteAsync(iconString, fontFamily, streamRef, iconSize, scale, tcs, diagnostics);
+        if (_lowPriorityQueue.Writer.TryWrite(lowPriorityWorkItem))
+        {
+            diagnostics?.Enqueued(IconLoadPriority.Low);
+            return true;
+        }
+
+        diagnostics?.Rejected();
+        return false;
     }
 
     public async ValueTask DisposeAsync()
@@ -135,15 +144,20 @@ internal sealed partial class IconLoaderService : IIconLoaderService
         IRandomAccessStreamReference? streamRef,
         Size iconSize,
         double scale,
-        TaskCompletionSource<IconSource?> tcs)
+        TaskCompletionSource<IconSource?> tcs,
+        IconLoadMeasurement? diagnostics)
     {
+        diagnostics?.WorkerStarted(WorkerCount);
+
         try
         {
-            var result = await LoadIconCoreAsync(iconString, fontFamily, streamRef, iconSize, scale).ConfigureAwait(false);
+            var result = await LoadIconCoreAsync(iconString, fontFamily, streamRef, iconSize, scale, diagnostics).ConfigureAwait(false);
+            diagnostics?.Complete();
             tcs.TrySetResult(result);
         }
         catch (Exception ex)
         {
+            diagnostics?.Fail();
             tcs.TrySetException(ex);
         }
     }
@@ -153,7 +167,8 @@ internal sealed partial class IconLoaderService : IIconLoaderService
         string? fontFamily,
         IRandomAccessStreamReference? streamRef,
         Size iconSize,
-        double scale)
+        double scale,
+        IconLoadMeasurement? diagnostics)
     {
         var scaledSize = iconSize.IsEmpty
             ? iconSize
@@ -161,8 +176,24 @@ internal sealed partial class IconLoaderService : IIconLoaderService
 
         if (!string.IsNullOrEmpty(iconString))
         {
+            var dispatcherEnqueuedAt = diagnostics?.BeginDispatcherWait() ?? 0;
             return await _dispatcherQueue
-                .EnqueueAsync(() => GetStringIconSource(iconString, fontFamily, scaledSize), LoadingPriorityOnDispatcher)
+                .EnqueueAsync(
+                    () =>
+                    {
+                        var dispatcherStartedAt = diagnostics?.DispatcherStarted(dispatcherEnqueuedAt) ?? 0;
+                        try
+                        {
+                            var result = GetStringIconSource(iconString, fontFamily, scaledSize);
+                            diagnostics?.SetResult(result);
+                            return result;
+                        }
+                        finally
+                        {
+                            diagnostics?.DispatcherCompleted(dispatcherStartedAt);
+                        }
+                    },
+                    LoadingPriorityOnDispatcher)
                 .ConfigureAwait(false);
         }
 
@@ -170,18 +201,31 @@ internal sealed partial class IconLoaderService : IIconLoaderService
         {
             try
             {
+                var preparationStartedAt = diagnostics?.BeginBackgroundPreparation() ?? 0;
                 using var bitmapStream = await streamRef.OpenReadAsync().AsTask().ConfigureAwait(false);
+                diagnostics?.CompleteBackgroundPreparation(preparationStartedAt);
 
+                var dispatcherEnqueuedAt = diagnostics?.BeginDispatcherWait() ?? 0;
                 return await _dispatcherQueue
                     .EnqueueAsync(BuildImageSource, LoadingPriorityOnDispatcher)
                     .ConfigureAwait(false);
 
                 async Task<IconSource?> BuildImageSource()
                 {
-                    var bitmap = new BitmapImage();
-                    ApplyDecodeSize(bitmap, scaledSize);
-                    await bitmap.SetSourceAsync(bitmapStream);
-                    return new ImageIconSource { ImageSource = bitmap };
+                    var dispatcherStartedAt = diagnostics?.DispatcherStarted(dispatcherEnqueuedAt) ?? 0;
+                    try
+                    {
+                        var bitmap = new BitmapImage();
+                        ApplyDecodeSize(bitmap, scaledSize);
+                        await bitmap.SetSourceAsync(bitmapStream);
+                        var result = new ImageIconSource { ImageSource = bitmap };
+                        diagnostics?.SetResult(result);
+                        return result;
+                    }
+                    finally
+                    {
+                        diagnostics?.DispatcherCompleted(dispatcherStartedAt);
+                    }
                 }
             }
 #pragma warning disable CS0168 // Variable is declared but never used
