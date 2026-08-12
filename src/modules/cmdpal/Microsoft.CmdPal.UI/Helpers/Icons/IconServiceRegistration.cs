@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation
+// Copyright (c) Microsoft Corporation
 // The Microsoft Corporation licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for more information.
 
@@ -22,7 +22,11 @@ internal static class IconServiceRegistration
 
         services.AddKeyedSingleton<IIconSourceProvider>(
             WellKnownIconSize.Size20,
-            (_, _) => new CachedIconSourceProvider(loader, 20, 1024));
+            (_, _) => new CachedIconSourceProvider(
+                loader,
+                20,
+                glyphCacheSize: 4096,
+                otherCacheSize: 1024));
 
         services.AddKeyedSingleton<IIconSourceProvider>(
             WellKnownIconSize.Size32,
@@ -30,11 +34,19 @@ internal static class IconServiceRegistration
 
         services.AddKeyedSingleton<IIconSourceProvider>(
             WellKnownIconSize.Size64,
-            (_, _) => new CachedIconSourceProvider(loader, 64, 256));
+            (_, _) => new CachedIconSourceProvider(
+                loader,
+                64,
+                glyphCacheSize: 1024,
+                otherCacheSize: 256));
 
         services.AddKeyedSingleton<IIconSourceProvider>(
             WellKnownIconSize.Size256,
-            (_, _) => new CachedIconSourceProvider(loader, 256, 64));
+            (_, _) => new CachedIconSourceProvider(
+                loader,
+                256,
+                glyphCacheSize: 256,
+                otherCacheSize: 64));
 
         services.AddKeyedSingleton<IIconSourceProvider>(
             WellKnownIconSize.Unbound,

@@ -103,24 +103,34 @@ internal static class IconLoadDiagnostics
         return session.CreateLoad(ClassifyInput(iconString, hasStream), width, height, scale);
     }
 
-    internal static void RecordCacheLookup(Size iconSize, int capacity, bool hit)
+    internal static void RecordCacheLookup(
+        Size iconSize,
+        IconCachePartition partition,
+        int capacity,
+        bool hit)
     {
-        Volatile.Read(ref _activeSession)?.RecordCacheLookup(iconSize, capacity, hit);
+        Volatile.Read(ref _activeSession)?.RecordCacheLookup(iconSize, partition, capacity, hit);
     }
 
-    internal static void RecordCacheEntryAdded(Size iconSize, int capacity, int entryCount)
+    internal static void RecordCacheEntryAdded(
+        Size iconSize,
+        IconCachePartition partition,
+        int capacity,
+        int entryCount)
     {
-        Volatile.Read(ref _activeSession)?.RecordCacheEntryAdded(iconSize, capacity, entryCount);
+        Volatile.Read(ref _activeSession)?.RecordCacheEntryAdded(iconSize, partition, capacity, entryCount);
     }
 
     internal static void RecordCacheEntryRemoved(
         Size iconSize,
+        IconCachePartition partition,
         int capacity,
         int entryCount,
         AdaptiveCacheRemovalReason reason)
     {
         Volatile.Read(ref _activeSession)?.RecordCacheEntryRemoved(
             iconSize,
+            partition,
             capacity,
             entryCount,
             reason);
