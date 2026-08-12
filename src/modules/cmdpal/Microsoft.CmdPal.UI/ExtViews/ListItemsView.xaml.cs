@@ -39,6 +39,8 @@ public sealed partial class ListItemsView : UserControl,
     IRecipient<ActivateSelectedListItemMessage>,
     IRecipient<ActivateSecondaryCommandMessage>
 {
+    private readonly Dictionary<SelectorItem, (ListItemViewModel Item, ListItemRealizationRegistration Registration)> _realizedItems = new(64);
+
     private InputSource _lastInputSource;
 
     private int _itemsUpdatedVersion;
@@ -95,6 +97,7 @@ public sealed partial class ListItemsView : UserControl,
         _isLoaded = false;
         UnregisterMessenger();
         CancelPendingContextMenuOpen();
+        ReleaseRealizedItems();
     }
 
     private void RegisterMessenger()
@@ -314,6 +317,58 @@ public sealed partial class ListItemsView : UserControl,
         // Mirrors the back-navigation initial-selection behavior previously
         // owned by ListPage.OnNavigatedTo.
         EnsureInitialSelection();
+    }
+
+    private void Items_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        try
+        {
+            var container = args.ItemContainer;
+            if (args.InRecycleQueue || args.Item is not ListItemViewModel item)
+            {
+                ReleaseRealizedItem(container);
+                return;
+            }
+
+            if (_realizedItems.TryGetValue(container, out var existing))
+            {
+                if (existing.Registration.IsFor(item))
+                {
+                    return;
+                }
+
+                existing.Registration.Release();
+                _realizedItems.Remove(container);
+            }
+
+            var registration = item.BeginRealization();
+            if (registration.IsValid)
+            {
+                _realizedItems.Add(container, (item, registration));
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError("Failed to track a realized list item", ex);
+        }
+    }
+
+    private void ReleaseRealizedItem(SelectorItem container)
+    {
+        if (_realizedItems.Remove(container, out var registration))
+        {
+            registration.Registration.Release();
+        }
+    }
+
+    private void ReleaseRealizedItems()
+    {
+        foreach (var registration in _realizedItems.Values)
+        {
+            registration.Registration.Release();
+        }
+
+        _realizedItems.Clear();
     }
 
     private void ListViewScrollViewer_ViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
@@ -640,6 +695,8 @@ public sealed partial class ListItemsView : UserControl,
     {
         if (d is ListItemsView @this)
         {
+            @this.ReleaseRealizedItems();
+
             if (e.OldValue is ListViewModel old)
             {
                 old.ItemsUpdated -= @this.Page_ItemsUpdated;

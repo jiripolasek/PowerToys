@@ -100,6 +100,7 @@ public partial class ListViewModel : PageViewModel, IDisposable
     private bool _isDynamic;
 
     private Task? _initializeItemsTask;
+    private ListItemInitializationCoordinator? _itemInitializationCoordinator;
 
     // For cancelling the task to load the properties from the items in the list
     private CancellationTokenSource? _cancellationTokenSource;
@@ -422,11 +423,12 @@ public partial class ListViewModel : PageViewModel, IDisposable
             {
                 ThrowIfFetchCanceledOrStale(fetchGeneration, cancellationToken);
 
-                item?.SafeInitializeProperties();
+                item?.InitializePropertiesOnce();
             }
 
             // Cancel any ongoing property initialization for the previous list.
             CancelAndDisposeTokenSource(ref _cancellationTokenSource);
+            Interlocked.Exchange(ref _itemInitializationCoordinator, null)?.Stop();
 
             ThrowIfFetchCanceledOrStale(fetchGeneration, cancellationToken);
 
@@ -500,11 +502,16 @@ public partial class ListViewModel : PageViewModel, IDisposable
         var initializeItemsCts = new CancellationTokenSource();
         _cancellationTokenSource = initializeItemsCts;
         var initializeItemsToken = initializeItemsCts.Token;
-
-        _initializeItemsTask = new Task(() =>
+        ListItemViewModel[] itemSnapshot;
+        lock (_listLock)
         {
-            InitializeItemsTask(initializeItemsToken);
-        });
+            itemSnapshot = Items.ToArray();
+        }
+
+        var itemInitializationCoordinator = new ListItemInitializationCoordinator(itemSnapshot);
+        Interlocked.Exchange(ref _itemInitializationCoordinator, itemInitializationCoordinator)?.Stop();
+
+        _initializeItemsTask = new Task(() => itemInitializationCoordinator.Run(initializeItemsToken));
         _initializeItemsTask.Start();
 
         DoOnUiThread(
@@ -560,41 +567,6 @@ public partial class ListViewModel : PageViewModel, IDisposable
                     _isLoadingMore.Clear();
                 }
             });
-    }
-
-    private void InitializeItemsTask(CancellationToken ct)
-    {
-        // Were we already canceled?
-        if (ct.IsCancellationRequested)
-        {
-            return;
-        }
-
-        ListItemViewModel[] iterable;
-        lock (_listLock)
-        {
-            iterable = Items.ToArray();
-        }
-
-        foreach (var item in iterable)
-        {
-            if (ct.IsCancellationRequested)
-            {
-                return;
-            }
-
-            // TODO: GH #502
-            // We should probably remove the item from the list if it
-            // entered the error state. I had issues doing that without having
-            // multiple threads muck with `Items` (and possibly FilteredItems!)
-            // at once.
-            item.SafeInitializeProperties();
-
-            if (ct.IsCancellationRequested)
-            {
-                return;
-            }
-        }
     }
 
     /// <summary>
@@ -849,48 +821,76 @@ public partial class ListViewModel : PageViewModel, IDisposable
         var cts = _selectedItemCts = new CancellationTokenSource();
         var ct = cts.Token;
 
+        var itemInitializationCoordinator = Volatile.Read(ref _itemInitializationCoordinator);
         _ = Task.Run(
-            () =>
+            async () =>
             {
-                if (ct.IsCancellationRequested)
-                {
-                    return;
-                }
-
-                if (!item.SafeSlowInit())
+                try
                 {
                     if (ct.IsCancellationRequested)
                     {
                         return;
                     }
 
-                    WeakReferenceMessenger.Default.Send<HideDetailsMessage>();
+                    bool initialized;
+                    if (itemInitializationCoordinator is not null)
+                    {
+                        initialized = await itemInitializationCoordinator.RequestInitializationAsync(item, ct).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        item.InitializePropertiesOnce();
+                        initialized = item.InitializationWasSuccessful;
+                    }
 
-                    return;
-                }
+                    if (!initialized || ct.IsCancellationRequested)
+                    {
+                        if (!ct.IsCancellationRequested)
+                        {
+                            WeakReferenceMessenger.Default.Send<HideDetailsMessage>();
+                        }
 
-                if (ct.IsCancellationRequested)
-                {
-                    return;
-                }
+                        return;
+                    }
 
-                // SafeSlowInit completed on a background thread — details
-                // messages will be marshalled to the UI thread by the receiver.
-                if (ShowDetails && item.HasDetails)
-                {
-                    WeakReferenceMessenger.Default.Send<ShowDetailsMessage>(new(item.Details));
-                }
-                else
-                {
-                    WeakReferenceMessenger.Default.Send<HideDetailsMessage>();
-                }
+                    if (!item.SafeSlowInit())
+                    {
+                        if (ct.IsCancellationRequested)
+                        {
+                            return;
+                        }
 
-                var suggestion = item.TextToSuggest;
-                DoOnUiThread(() =>
+                        WeakReferenceMessenger.Default.Send<HideDetailsMessage>();
+
+                        return;
+                    }
+
+                    if (ct.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
+                    // SafeSlowInit completed on a background thread — details
+                    // messages will be marshalled to the UI thread by the receiver.
+                    if (ShowDetails && item.HasDetails)
+                    {
+                        WeakReferenceMessenger.Default.Send<ShowDetailsMessage>(new(item.Details));
+                    }
+                    else
+                    {
+                        WeakReferenceMessenger.Default.Send<HideDetailsMessage>();
+                    }
+
+                    var suggestion = item.TextToSuggest;
+                    DoOnUiThread(() =>
+                    {
+                        TextToSuggest = suggestion;
+                        WeakReferenceMessenger.Default.Send<UpdateSuggestionMessage>(new(suggestion));
+                    });
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
                 {
-                    TextToSuggest = suggestion;
-                    WeakReferenceMessenger.Default.Send<UpdateSuggestionMessage>(new(suggestion));
-                });
+                }
             },
             ct);
     }
@@ -1134,6 +1134,7 @@ public partial class ListViewModel : PageViewModel, IDisposable
     {
         GC.SuppressFinalize(this);
         CancelAndDisposeTokenSource(ref _cancellationTokenSource);
+        Interlocked.Exchange(ref _itemInitializationCoordinator, null)?.Stop();
         CancelAndDisposeTokenSource(ref filterCancellationTokenSource);
         CancelAndDisposeTokenSource(ref _fetchItemsCancellationTokenSource);
         CancelAndDisposeTokenSource(ref _selectedItemCts);
@@ -1147,6 +1148,7 @@ public partial class ListViewModel : PageViewModel, IDisposable
         EmptyContent = new(new(null), PageContext, contextMenuFactory: null); // necessary?
 
         CancelAndDisposeTokenSource(ref _cancellationTokenSource);
+        Interlocked.Exchange(ref _itemInitializationCoordinator, null)?.Stop();
         CancelAndDisposeTokenSource(ref filterCancellationTokenSource);
         CancelAndDisposeTokenSource(ref _fetchItemsCancellationTokenSource);
         CancelAndDisposeTokenSource(ref _selectedItemCts);

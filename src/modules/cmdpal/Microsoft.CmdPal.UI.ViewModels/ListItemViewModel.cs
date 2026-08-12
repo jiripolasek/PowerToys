@@ -13,6 +13,15 @@ namespace Microsoft.CmdPal.UI.ViewModels;
 public partial class ListItemViewModel : CommandItemViewModel
 {
     private const int MaxVisibleTags = 3;
+    private const int InitializationNotStarted = 0;
+    private const int InitializationInProgress = 1;
+    private const int InitializationSucceeded = 2;
+    private const int InitializationFailed = 3;
+
+    private int _initializationState;
+    private TaskCompletionSource<bool>? _initializationCompletion;
+    private ListItemInitializationCoordinator? _initializationCoordinator;
+    private long _realizationToken;
 
     public new ExtensionObject<IListItem> Model { get; }
 
@@ -73,6 +82,98 @@ public partial class ListItemViewModel : CommandItemViewModel
         : base(new(model), context, contextMenuFactory)
     {
         Model = new ExtensionObject<IListItem>(model);
+    }
+
+    internal bool IsInitializationComplete => Volatile.Read(ref _initializationState) >= InitializationSucceeded;
+
+    internal bool InitializationWasSuccessful => Volatile.Read(ref _initializationState) == InitializationSucceeded;
+
+    internal void AttachInitializationCoordinator(ListItemInitializationCoordinator coordinator)
+    {
+        Volatile.Write(ref _initializationCoordinator, coordinator);
+        Interlocked.Exchange(ref _realizationToken, 0);
+    }
+
+    internal bool IsAttachedTo(ListItemInitializationCoordinator coordinator) =>
+        ReferenceEquals(Volatile.Read(ref _initializationCoordinator), coordinator);
+
+    public ListItemRealizationRegistration BeginRealization()
+    {
+        var coordinator = Volatile.Read(ref _initializationCoordinator);
+        return coordinator?.BeginRealization(this) ?? default;
+    }
+
+    internal bool TrySetRealization(ListItemInitializationCoordinator coordinator, long token)
+    {
+        if (!IsAttachedTo(coordinator))
+        {
+            return false;
+        }
+
+        Interlocked.Exchange(ref _realizationToken, token);
+        if (IsAttachedTo(coordinator))
+        {
+            return true;
+        }
+
+        Interlocked.CompareExchange(ref _realizationToken, 0, token);
+        return false;
+    }
+
+    internal bool IsCurrentRealization(ListItemInitializationCoordinator coordinator, long token) =>
+        IsAttachedTo(coordinator) &&
+        Volatile.Read(ref _realizationToken) == token;
+
+    internal void EndRealization(ListItemInitializationCoordinator coordinator, long token)
+    {
+        if (IsAttachedTo(coordinator))
+        {
+            Interlocked.CompareExchange(ref _realizationToken, 0, token);
+        }
+    }
+
+    internal void InitializePropertiesOnce()
+    {
+        if (Interlocked.CompareExchange(ref _initializationState, InitializationInProgress, InitializationNotStarted) != InitializationNotStarted)
+        {
+            return;
+        }
+
+        var succeeded = false;
+        try
+        {
+            succeeded = SafeInitializeProperties();
+        }
+        finally
+        {
+            Volatile.Write(ref _initializationState, succeeded ? InitializationSucceeded : InitializationFailed);
+            Volatile.Read(ref _initializationCompletion)?.TrySetResult(succeeded);
+        }
+    }
+
+    internal Task<bool> WaitForInitializationAsync(CancellationToken cancellationToken)
+    {
+        var state = Volatile.Read(ref _initializationState);
+        if (state >= InitializationSucceeded)
+        {
+            return Task.FromResult(state == InitializationSucceeded);
+        }
+
+        var newCompletion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var completion = Interlocked.CompareExchange(ref _initializationCompletion, newCompletion, null) ?? newCompletion;
+
+        // Initialization may have completed between the first state read and
+        // publishing the completion source. Complete it here as the finding
+        // thread so no waiter can be stranded by that race.
+        state = Volatile.Read(ref _initializationState);
+        if (state >= InitializationSucceeded)
+        {
+            completion.TrySetResult(state == InitializationSucceeded);
+        }
+
+        return cancellationToken.CanBeCanceled
+            ? completion.Task.WaitAsync(cancellationToken)
+            : completion.Task;
     }
 
     public override void InitializeProperties()
