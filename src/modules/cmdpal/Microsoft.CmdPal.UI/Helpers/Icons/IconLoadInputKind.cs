@@ -23,4 +23,8 @@ internal enum IconLoadInputKind
     SpecializedAppIcon,
     GeneratedSwatch,
     GeneratedInitials,
+    SvgFile,
+    SvgInline,
+    ThemedSvgFile,
+    ThemedSvgInline,
 }

@@ -13,6 +13,7 @@ internal static class IconProtocolRegistry
     [
         AppIconProtocolProcessor.Instance,
         GeneratedIconProtocolProcessor.Instance,
+        SvgIconProtocolProcessor.Instance,
     ];
 
     public static IIconProtocolProcessor? Find(string? value) => Find(value, Processors);

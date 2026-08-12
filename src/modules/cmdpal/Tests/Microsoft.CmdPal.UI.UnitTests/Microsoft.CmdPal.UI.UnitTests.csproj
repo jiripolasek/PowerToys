@@ -38,6 +38,8 @@
     <Compile Include="..\..\Microsoft.CmdPal.UI\Helpers\Icons\GeneratedIconProtocolProcessor.cs" Link="Helpers\Icons\GeneratedIconProtocolProcessor.cs" />
     <Compile Include="..\..\Microsoft.CmdPal.UI\Helpers\Icons\InitialsVectorFont.cs" Link="Helpers\Icons\InitialsVectorFont.cs" />
     <Compile Include="..\..\Microsoft.CmdPal.UI\Helpers\Icons\SemanticIconColor.cs" Link="Helpers\Icons\SemanticIconColor.cs" />
+    <Compile Include="..\..\Microsoft.CmdPal.UI\Helpers\Icons\SvgIconProtocol.cs" Link="Helpers\Icons\SvgIconProtocol.cs" />
+    <Compile Include="..\..\Microsoft.CmdPal.UI\Helpers\Icons\SvgIconProtocolProcessor.cs" Link="Helpers\Icons\SvgIconProtocolProcessor.cs" />
     <Compile Include="..\..\Microsoft.CmdPal.UI\Helpers\Icons\IconCachePartition.cs" Link="Helpers\Icons\IconCachePartition.cs" />
     <Compile Include="..\..\Microsoft.CmdPal.UI\Helpers\Icons\IconLoadDemand.cs" Link="Helpers\Icons\IconLoadDemand.cs" />
     <Compile Include="..\..\Microsoft.CmdPal.UI\Helpers\Icons\IconLoadDemandStage.cs" Link="Helpers\Icons\IconLoadDemandStage.cs" />
