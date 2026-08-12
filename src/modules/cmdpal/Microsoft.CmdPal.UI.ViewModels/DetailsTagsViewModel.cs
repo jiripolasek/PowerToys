@@ -32,7 +32,7 @@ public partial class DetailsTagsViewModel(
             .Select(t =>
         {
             var vm = new TagViewModel(t, PageContext);
-            vm.InitializeProperties();
+            vm.InitializePropertiesBeforePublication();
             return vm;
         })
             .ToList() ?? [];

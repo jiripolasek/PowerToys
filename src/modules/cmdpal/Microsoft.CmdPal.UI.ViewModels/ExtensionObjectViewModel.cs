@@ -183,11 +183,23 @@ public abstract partial class ExtensionObjectViewModel : ObservableObject, IBatc
                     var p = (UiBatch)state!;
                     try
                     {
-                        p.Owner.RaiseUi(p.Names, p.Count);
-                    }
-                    catch (Exception ex)
-                    {
-                        CoreLogger.LogError("Failed to raise property change notifications on UI thread.", ex);
+                        try
+                        {
+                            p.Owner.ApplyPendingUiState();
+                        }
+                        catch (Exception ex)
+                        {
+                            CoreLogger.LogError("Failed to apply pending view-model state on UI thread.", ex);
+                        }
+
+                        try
+                        {
+                            p.Owner.RaiseUi(p.Names, p.Count);
+                        }
+                        catch (Exception ex)
+                        {
+                            CoreLogger.LogError("Failed to raise property change notifications on UI thread.", ex);
+                        }
                     }
                     finally
                     {
@@ -212,6 +224,14 @@ public abstract partial class ExtensionObjectViewModel : ObservableObject, IBatc
                 ArrayPool<string>.Shared.Return(buffer, clearArray: true);
             }
         }
+    }
+
+    /// <summary>
+    /// Applies state that must remain UI-thread-owned immediately before its
+    /// batched property-change notifications are raised.
+    /// </summary>
+    protected virtual void ApplyPendingUiState()
+    {
     }
 
     private void RaiseUi(string[] names, int count)

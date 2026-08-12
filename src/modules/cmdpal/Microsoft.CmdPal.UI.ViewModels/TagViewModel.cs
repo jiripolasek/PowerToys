@@ -25,7 +25,11 @@ public partial class TagViewModel(ITag _tag, WeakReference<IPageContext> context
 
     public IconInfoViewModel Icon { get; private set; } = new(null);
 
-    public override void InitializeProperties()
+    public override void InitializeProperties() => InitializeProperties(publishChanges: true);
+
+    internal void InitializePropertiesBeforePublication() => InitializeProperties(publishChanges: false);
+
+    private void InitializeProperties(bool publishChanges)
     {
         var model = _tagModel.Unsafe;
         if (model is null)
@@ -39,6 +43,11 @@ public partial class TagViewModel(ITag _tag, WeakReference<IPageContext> context
         ModelToolTip = model.ToolTip;
         Icon = new(model.Icon);
         Icon.InitializeProperties();
+
+        if (!publishChanges)
+        {
+            return;
+        }
 
         UpdateProperty(nameof(Text));
         UpdateProperty(nameof(Foreground));

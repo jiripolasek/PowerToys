@@ -34,6 +34,7 @@ public partial class ListItemViewModel : CommandItemViewModel
     public List<TagViewModel>? VisibleTags { get; private set; }
 
     private TagViewModel? _overflowTag;
+    private PendingTagsUpdate? _pendingTagsUpdate;
 
     public string TextToSuggest { get; private set; } = string.Empty;
 
@@ -377,55 +378,66 @@ public partial class ListItemViewModel : CommandItemViewModel
         var newTags = newTagsFromModel?.Select(t =>
         {
             var vm = new TagViewModel(t, PageContext);
-            vm.InitializeProperties();
+            vm.InitializePropertiesBeforePublication();
             return vm;
         })
             .ToList() ?? [];
 
-        DoOnUiThread(
-            () =>
-            {
-                // Tags being an ObservableCollection instead of a List lead to
-                // many COM exception issues.
-                Tags = [.. newTags];
-                UpdateVisibleTags();
+        var update = CreatePendingTagsUpdate([.. newTags]);
 
-                // We're already in UI thread, so just raise the events
-                OnPropertyChanged(nameof(Tags));
-                OnPropertyChanged(nameof(HasTags));
-                OnPropertyChanged(nameof(VisibleTags));
-            });
+        // Keep list assignment UI-thread-owned, but fold it into the row's
+        // existing batched notification instead of posting a dedicated STA task.
+        // Concurrent model callbacks coalesce to the last completed snapshot.
+        _ = Interlocked.Exchange(ref _pendingTagsUpdate, update);
+        UpdateProperty(nameof(Tags), nameof(HasTags), nameof(VisibleTags));
     }
 
-    private void UpdateVisibleTags()
+    protected override void ApplyPendingUiState()
     {
-        var allTags = Tags;
-        if (allTags is null || allTags.Count == 0)
+        base.ApplyPendingUiState();
+
+        var update = Interlocked.Exchange(ref _pendingTagsUpdate, null);
+        if (update is null)
         {
-            VisibleTags = null;
+            return;
         }
-        else if (allTags.Count <= MaxVisibleTags)
-        {
-            VisibleTags = [.. allTags];
-        }
-        else
-        {
-            _overflowTag?.SafeCleanup();
-            var visible = allTags.Take(MaxVisibleTags).ToList();
-            var overflowCount = allTags.Count - MaxVisibleTags;
-            var hiddenTagNames = allTags.Skip(MaxVisibleTags).Select(t => t.Text);
-            var overflowTag = new TagViewModel(
-                new Tag($"+{overflowCount}")
-                {
-                    ToolTip = string.Join("\n", hiddenTagNames),
-                },
-                PageContext);
-            overflowTag.InitializeProperties();
-            _overflowTag = overflowTag;
-            visible.Add(overflowTag);
-            VisibleTags = visible;
-        }
+
+        _overflowTag?.SafeCleanup();
+        _overflowTag = update.OverflowTag;
+        Tags = update.Tags;
+        VisibleTags = update.VisibleTags;
     }
+
+    private PendingTagsUpdate CreatePendingTagsUpdate(List<TagViewModel> allTags)
+    {
+        if (allTags.Count == 0)
+        {
+            return new(allTags, null, null);
+        }
+
+        if (allTags.Count <= MaxVisibleTags)
+        {
+            return new(allTags, [.. allTags], null);
+        }
+
+        var visible = allTags.Take(MaxVisibleTags).ToList();
+        var overflowCount = allTags.Count - MaxVisibleTags;
+        var hiddenTagNames = allTags.Skip(MaxVisibleTags).Select(t => t.Text);
+        var overflowTag = new TagViewModel(
+            new Tag($"+{overflowCount}")
+            {
+                ToolTip = string.Join("\n", hiddenTagNames),
+            },
+            PageContext);
+        overflowTag.InitializePropertiesBeforePublication();
+        visible.Add(overflowTag);
+        return new(allTags, visible, overflowTag);
+    }
+
+    private sealed record PendingTagsUpdate(
+        List<TagViewModel> Tags,
+        List<TagViewModel>? VisibleTags,
+        TagViewModel? OverflowTag);
 
     private void UpdateShowsTitle()
     {
