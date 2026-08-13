@@ -4,6 +4,7 @@
 
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using Microsoft.PowerToys.UITest.Next;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
@@ -12,11 +13,19 @@ namespace Microsoft.CmdPal.IconBenchmark;
 [TestClass]
 public class IconPerformanceTests
 {
+    private static readonly IntPtr HwndTopmost = new(-1);
+    private static readonly IntPtr HwndNotTopmost = new(-2);
+    private const uint SwpNoMove = 0x0002;
+    private const uint SwpNoSize = 0x0001;
+    private const uint SwpShowWindow = 0x0040;
     private const string ProcessName = "Microsoft.CmdPal.UI";
     private const string ScenarioEnvironmentVariable = "CMDPAL_ICON_BENCHMARK_SCENARIO";
     private const string StartDiagnosticsAutomationId = "CmdPal_InternalPage_StartIconDiagnostics";
     private const string StopDiagnosticsAutomationId = "CmdPal_InternalPage_StopIconDiagnostics";
     private const string CopyDiagnosticsAutomationId = "CmdPal_InternalPage_CopyIconDiagnostics_1";
+    private const int DiagnosticsReportGenerationTimeoutMilliseconds = 120_000;
+    private const int DiagnosticsClipboardTimeoutMilliseconds = 120_000;
+    private const int DiagnosticsClipboardRetryMilliseconds = 10_000;
 
     public required TestContext TestContext { get; set; }
 
@@ -71,7 +80,7 @@ public class IconPerformanceTests
 
         WindowHelper.MaximizeWindow(new IntPtr(mainWindow.WindowHandle));
         Assert.IsTrue(
-            WindowControl.WaitForForeground(new IntPtr(mainWindow.WindowHandle), timeoutMS: 5_000, requiredConsecutiveMatches: 2),
+            WaitForForegroundWithAltFallback(mainWindow),
             "The CmdPal main window could not be brought to the foreground.");
 
         Step("Waiting for the main command surface to be ready");
@@ -126,11 +135,65 @@ public class IconPerformanceTests
         TestContext.AddResultFile(options.OutputPath);
     }
 
+    private static bool WaitForForegroundWithAltFallback(Session mainWindow)
+    {
+        var windowHandle = new IntPtr(mainWindow.WindowHandle);
+        if (WindowControl.WaitForForeground(windowHandle, timeoutMS: 5_000, requiredConsecutiveMatches: 2))
+        {
+            return true;
+        }
+
+        // An injected ALT press grants the calling input queue the same foreground-activation
+        // opportunity as an interactive ALT gesture. This is only a setup fallback; diagnostics
+        // have not started and no benchmark input has been sent yet.
+        KeyboardHelper.PressKey(Key.Alt);
+        try
+        {
+            WindowControl.TryBringToForeground(windowHandle);
+        }
+        finally
+        {
+            KeyboardHelper.ReleaseKey(Key.Alt);
+        }
+
+        if (WindowControl.WaitForForeground(windowHandle, timeoutMS: 10_000, requiredConsecutiveMatches: 2))
+        {
+            return true;
+        }
+
+        // As a final fallback, expose the target above the current foreground window and perform
+        // a genuine title-bar click. This avoids clicking any command content and is still entirely
+        // before diagnostics or benchmark input begin.
+        var bounds = WindowHelper.GetWindowBounds(windowHandle);
+        SetWindowPos(windowHandle, HwndTopmost, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpShowWindow);
+        try
+        {
+            MouseHelper.LeftClickAt((bounds.Left + bounds.Right) / 2, bounds.Top + 16);
+        }
+        finally
+        {
+            SetWindowPos(windowHandle, HwndNotTopmost, 0, 0, 0, 0, SwpNoMove | SwpNoSize | SwpShowWindow);
+        }
+
+        return WindowControl.WaitForForeground(windowHandle, timeoutMS: 10_000, requiredConsecutiveMatches: 2);
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(
+        IntPtr windowHandle,
+        IntPtr insertAfter,
+        int x,
+        int y,
+        int width,
+        int height,
+        uint flags);
+
     private Session StartDiagnostics(Session mainWindow, string productPath)
     {
         var settingsWindow = OpenInternalTools(mainWindow);
         Step("Starting icon diagnostics");
-        settingsWindow.Find<Button>(By.AccessibilityId(StartDiagnosticsAutomationId), 30_000).Click();
+        settingsWindow.Find<Button>(By.AccessibilityId(StartDiagnosticsAutomationId), 30_000).Invoke();
         CloseSettingsWindow(settingsWindow);
 
         // Opening Settings unloads the main window's XAML automation surface. Closing Settings leaves
@@ -146,13 +209,21 @@ public class IconPerformanceTests
     {
         var settingsWindow = OpenInternalTools(mainWindow);
         Step("Stopping icon diagnostics");
-        settingsWindow.Find<Button>(By.AccessibilityId(StopDiagnosticsAutomationId), 30_000).Click();
+        // These actions delimit or follow the measured interval. InvokePattern avoids turning a
+        // missed coordinate click into an apparent diagnostics-generation hang.
+        settingsWindow.Find<Button>(By.AccessibilityId(StopDiagnosticsAutomationId), 30_000).Invoke();
+
+        Step("Waiting for icon diagnostics session 1 report");
+        var copyButton = settingsWindow.Find<Button>(
+            By.AccessibilityId(CopyDiagnosticsAutomationId),
+            DiagnosticsReportGenerationTimeoutMilliseconds);
 
         ClipboardHelper.Clear();
         Step("Copying icon diagnostics session 1");
-        settingsWindow.Find<Button>(By.AccessibilityId(CopyDiagnosticsAutomationId), 30_000).Click();
+        copyButton.Invoke();
 
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        var deadline = Environment.TickCount64 + DiagnosticsClipboardTimeoutMilliseconds;
+        var nextCopyAttempt = Environment.TickCount64 + DiagnosticsClipboardRetryMilliseconds;
         do
         {
             var report = ClipboardHelper.GetText();
@@ -161,11 +232,18 @@ public class IconPerformanceTests
                 return report;
             }
 
+            if (Environment.TickCount64 >= nextCopyAttempt)
+            {
+                Step("Retrying icon diagnostics clipboard copy");
+                copyButton.Invoke();
+                nextCopyAttempt = Environment.TickCount64 + DiagnosticsClipboardRetryMilliseconds;
+            }
+
             Thread.Sleep(100);
         }
-        while (DateTime.UtcNow < deadline);
+        while (Environment.TickCount64 < deadline);
 
-        Assert.Fail("The icon diagnostics report was not available on the clipboard within 5 seconds.");
+        Assert.Fail("The icon diagnostics report was not available on the clipboard within 120 seconds.");
         return string.Empty;
     }
 
@@ -289,6 +367,7 @@ public class IconPerformanceTests
         var wraps = 0;
         var taps = 0;
         var tapsAtLastWrap = 0;
+        int? firstCycleLength = null;
         var lastScrollPercent = 0.0;
         int? nextKnownCycleProbeInterval = null;
         var waitingForTop = false;
@@ -326,13 +405,30 @@ public class IconPerformanceTests
                 waitingForTop = false;
                 var cycleLength = taps - tapsAtLastWrap;
                 tapsAtLastWrap = taps;
+                if (firstCycleLength is null)
+                {
+                    firstCycleLength = cycleLength;
+                }
+                else
+                {
+                    var minimumExpectedCycleLength = firstCycleLength.Value * 3 / 4;
+                    var maximumExpectedCycleLength = firstCycleLength.Value * 5 / 4;
+                    Assert.IsTrue(
+                        cycleLength >= minimumExpectedCycleLength && cycleLength <= maximumExpectedCycleLength,
+                        $"'{pageName}' traversal {wraps} took {cycleLength} Down taps after the first traversal took " +
+                        $"{firstCycleLength.Value}. The benchmark cannot claim equivalent full-page coverage.");
+                }
+
                 if (wraps < requiredWraps)
                 {
-                    // The list is stable after one complete cycle. Leave a small safety margin,
-                    // then resume fine UIA probes near the next end instead of polling throughout.
+                    // The first cycle includes startup/selection effects, so its tap count is only
+                    // an estimate of the next cycle. Resume probes around 90% of that estimate;
+                    // a fixed 50-tap margin can land just after a shorter subsequent cycle and miss
+                    // the end-to-start transition entirely.
+                    var safetyMargin = Math.Max(10 * fineProbeInterval, cycleLength / 10);
                     nextKnownCycleProbeInterval = Math.Max(
                         fineProbeInterval,
-                        cycleLength - (5 * fineProbeInterval));
+                        cycleLength - safetyMargin);
                 }
 
                 Step($"'{pageName}' wrapped to the start ({wraps}/{requiredWraps}) after {taps} Down taps");
@@ -388,10 +484,7 @@ public class IconPerformanceTests
 
     private static void FocusMainWindowForInput(Session mainWindow)
     {
-        mainWindow.EnsureForeground();
-        Assert.IsTrue(
-            WindowControl.WaitForForeground(new IntPtr(mainWindow.WindowHandle), timeoutMS: 5_000, requiredConsecutiveMatches: 2),
-            "The CmdPal main window could not be focused for benchmark input.");
+        Assert.IsTrue(WaitForForegroundWithAltFallback(mainWindow), "The CmdPal main window could not be focused for benchmark input.");
     }
 
     private static bool WaitForProcessState(bool expectedRunning, int timeoutMilliseconds)

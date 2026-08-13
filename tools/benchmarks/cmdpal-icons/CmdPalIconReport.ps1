@@ -81,6 +81,131 @@ function ConvertFrom-CmdPalIconReport {
             }
         }
 
+        function Get-CacheAggregate([string] $namePattern) {
+            $cachePaths = @(
+                $values.Keys |
+                    Where-Object { $_ -match "^Icon caches > ($namePattern) > Lookups$" } |
+                    ForEach-Object { $_ -replace ' > Lookups$', '' }
+            )
+            if ($cachePaths.Count -eq 0) {
+                return $null
+            }
+
+            $lookups = 0.0
+            $hits = 0.0
+            $misses = 0.0
+            $capacity = 0.0
+            $maximumObservedEntries = 0.0
+            $entriesAdded = 0.0
+            $entriesRemoved = 0.0
+            $capacityRemovals = 0.0
+            $lowScoreRemovals = 0.0
+            foreach ($cachePath in $cachePaths) {
+                $lookups += Get-Number "$cachePath > Lookups"
+                $hits += Get-Number "$cachePath > Hits"
+                $misses += Get-Number "$cachePath > Misses"
+                $maximumObservedEntries += Get-Number "$cachePath > Maximum observed entries"
+                $entriesAdded += Get-Number "$cachePath > Entries added during session"
+                $entriesRemoved += Get-Number "$cachePath > Entries removed during session"
+                $capacityRemovals += Get-Number "$cachePath > Removal reasons > Capacity"
+                $lowScoreRemovals += Get-Number "$cachePath > Removal reasons > LowScore"
+
+                $cacheName = $cachePath.Substring('Icon caches > '.Length)
+                if ($cacheName -match 'capacity ([0-9]+)$') {
+                    $capacity += [double]::Parse($Matches[1], [System.Globalization.CultureInfo]::InvariantCulture)
+                }
+            }
+
+            [pscustomobject]@{
+                Capacity = $capacity
+                Lookups = $lookups
+                Hits = $hits
+                Misses = $misses
+                HitRatePercent = if ($lookups -eq 0) { 0 } else { ($hits / $lookups) * 100 }
+                MaximumObservedEntries = $maximumObservedEntries
+                EntriesAdded = $entriesAdded
+                EntriesRemoved = $entriesRemoved
+                CapacityRemovals = $capacityRemovals
+                LowScoreRemovals = $lowScoreRemovals
+            }
+        }
+
+        $benchmarkMetadata = $null
+        $benchmarkContract = $null
+        $traversals = @{}
+        $metadataPath = [IO.Path]::ChangeExtension($resolvedPath, '.json')
+        if (Test-Path -LiteralPath $metadataPath) {
+            $benchmarkMetadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+            $contract = [ordered]@{
+                Scenario = $benchmarkMetadata.Scenario
+                Pages = @($benchmarkMetadata.Pages)
+                NavigationDelayMilliseconds = $benchmarkMetadata.NavigationDelayMilliseconds
+                SettleMilliseconds = $benchmarkMetadata.SettleMilliseconds
+                CooldownSeconds = $benchmarkMetadata.CooldownSeconds
+            }
+
+            if ($benchmarkMetadata.Scenario -eq 'A') {
+                $contract.KeyboardTraversalTimeoutMilliseconds = @($benchmarkMetadata.KeyboardTraversalTimeoutMilliseconds)
+                $contract.KeyboardWrapCounts = @($benchmarkMetadata.KeyboardWrapCounts)
+                $contract.KeyboardTapDelayMilliseconds = $benchmarkMetadata.KeyboardTapDelayMilliseconds
+                $contract.KeyboardCoarseProbeInterval = $benchmarkMetadata.KeyboardCoarseProbeInterval
+                $contract.KeyboardFineProbeInterval = $benchmarkMetadata.KeyboardFineProbeInterval
+            }
+            elseif ($benchmarkMetadata.Scenario -eq 'B') {
+                $contract.FastScrollCounts = @($benchmarkMetadata.FastScrollCounts)
+                $contract.SlowScrollCounts = @($benchmarkMetadata.SlowScrollCounts)
+                $contract.FastScrollDelayMilliseconds = $benchmarkMetadata.FastScrollDelayMilliseconds
+                $contract.SlowScrollDelayMilliseconds = $benchmarkMetadata.SlowScrollDelayMilliseconds
+            }
+
+            $benchmarkContract = $contract | ConvertTo-Json -Compress -Depth 4
+
+            $iteration = [int]$benchmarkMetadata.Iteration
+            $trxPath = Join-Path (Split-Path -Parent $resolvedPath) ('test-results\run-{0:D2}\benchmark.trx' -f $iteration)
+            if (Test-Path -LiteralPath $trxPath) {
+                [xml] $trx = Get-Content -LiteralPath $trxPath -Raw
+                $standardOutput = @(
+                    $trx.SelectNodes("//*[local-name()='UnitTestResult']/*[local-name()='Output']/*[local-name()='StdOut']") |
+                        ForEach-Object { $_.InnerText }
+                ) -join [Environment]::NewLine
+
+                foreach ($page in @($benchmarkMetadata.Pages)) {
+                    $escapedPage = [regex]::Escape([string]$page)
+                    $matches = [regex]::Matches(
+                        $standardOutput,
+                        "'$escapedPage' wrapped to the start \(([0-9]+)/([0-9]+)\) after ([0-9]+) Down taps")
+                    if ($matches.Count -eq 0) {
+                        continue
+                    }
+
+                    $cycleLengths = [System.Collections.Generic.List[int64]]::new()
+                    $previousTotal = 0L
+                    foreach ($match in $matches) {
+                        $total = [int64]::Parse($match.Groups[3].Value, [System.Globalization.CultureInfo]::InvariantCulture)
+                        $cycleLengths.Add($total - $previousTotal)
+                        $previousTotal = $total
+                    }
+
+                    $lastMatch = $matches[$matches.Count - 1]
+                    $firstCycleLength = $cycleLengths[0]
+                    $cyclesEquivalent = $true
+                    foreach ($cycleLength in $cycleLengths | Select-Object -Skip 1) {
+                        if ($cycleLength -lt ($firstCycleLength * 0.75) -or $cycleLength -gt ($firstCycleLength * 1.25)) {
+                            $cyclesEquivalent = $false
+                        }
+                    }
+
+                    $traversals[[string]$page] = [pscustomobject]@{
+                        CompletedWraps = [int]$lastMatch.Groups[1].Value
+                        RequiredWraps = [int]$lastMatch.Groups[2].Value
+                        TotalTaps = [int64]$lastMatch.Groups[3].Value
+                        CycleLengths = @($cycleLengths)
+                        CyclesEquivalent = $cyclesEquivalent
+                    }
+                }
+            }
+        }
+
         $listItemPrefix = 'Request origins > ListItem / SingleRow'
         $demandPrefix = 'Load demand > Demand-aware queue view'
 
@@ -113,6 +238,10 @@ function ConvertFrom-CmdPalIconReport {
             ListItemRequestsApplied = Get-Number "$listItemPrefix > Applied"
             ListItemRequestsStale = Get-Number "$listItemPrefix > Stale"
             ListItemAppliedLatency = Get-Statistics "$listItemPrefix > Request to completion by status > Applied"
+            ListItemResultBitmap = Get-Number "$listItemPrefix > Result kinds > Bitmap"
+            ListItemResultSvg = Get-Number "$listItemPrefix > Result kinds > Svg"
+            ListItemResultFluentGlyph = Get-Number "$listItemPrefix > Result kinds > FluentGlyph"
+            ListItemResultEmojiGlyph = Get-Number "$listItemPrefix > Result kinds > EmojiGlyph"
 
             ProviderNewLoad = Get-Number 'Provider resolution > NewLoad'
             ProviderCacheHit = Get-Number 'Provider resolution > CacheHit'
@@ -149,9 +278,17 @@ function ConvertFrom-CmdPalIconReport {
             ResultEmojiGlyph = Get-Number 'New-load result kinds > EmojiGlyph'
             ResultFailed = Get-Number 'New-load result kinds > Failed'
 
+            Cache20 = Get-CacheAggregate '20x20[^>]*'
+            GlyphCache20 = Get-CacheAggregate '20x20 Glyph cache,[^>]*'
+            OtherCache20 = Get-CacheAggregate '20x20 Other cache,[^>]*'
+
             IconElementsCreated = Get-Number 'Icon elements > Created'
             IconElementsReused = Get-Number 'Icon elements > Reused'
             IconElementUpdate = Get-Statistics 'Icon elements > Update wall time'
+
+            BenchmarkMetadata = $benchmarkMetadata
+            BenchmarkContract = $benchmarkContract
+            Traversals = $traversals
 
             RawValues = $values
         }

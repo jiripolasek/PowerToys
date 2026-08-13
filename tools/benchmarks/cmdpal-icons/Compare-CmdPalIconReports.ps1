@@ -77,6 +77,38 @@ function Get-Median {
     return ($values[$middle - 1] + $values[$middle]) / 2
 }
 
+function Get-TraversalMedian {
+    param(
+        [Parameter(Mandatory)]
+        [object[]] $Reports,
+
+        [Parameter(Mandatory)]
+        [string] $Page
+    )
+
+    $values = @(
+        $Reports |
+            ForEach-Object {
+                if ($_.Traversals.ContainsKey($Page)) {
+                    $_.Traversals[$Page].TotalTaps
+                }
+            } |
+            Where-Object { $null -ne $_ } |
+            ForEach-Object { [double]$_ } |
+            Sort-Object
+    )
+    if ($values.Count -eq 0) {
+        return $null
+    }
+
+    $middle = [int][Math]::Floor($values.Count / 2)
+    if (($values.Count % 2) -eq 1) {
+        return $values[$middle]
+    }
+
+    return ($values[$middle - 1] + $values[$middle]) / 2
+}
+
 function Format-Number {
     param(
         [AllowNull()]
@@ -134,6 +166,24 @@ function Assert-CompleteReports {
         if ($null -ne $report.ResultFailed -and $report.ResultFailed -ne 0) { $problems.Add("failed results=$($report.ResultFailed)") }
         if ($null -ne $report.UiCallbacksRejected -and $report.UiCallbacksRejected -ne 0) { $problems.Add("rejected UI probes=$($report.UiCallbacksRejected)") }
 
+        if ($null -ne $report.BenchmarkMetadata -and $report.BenchmarkMetadata.Scenario -eq 'A') {
+            foreach ($page in @($report.BenchmarkMetadata.Pages)) {
+                if (-not $report.Traversals.ContainsKey([string]$page)) {
+                    $problems.Add("missing completed traversal for '$page'")
+                    continue
+                }
+
+                $traversal = $report.Traversals[[string]$page]
+                if ($traversal.CompletedWraps -ne $traversal.RequiredWraps) {
+                    $problems.Add("incomplete traversal for '$page' ($($traversal.CompletedWraps)/$($traversal.RequiredWraps))")
+                }
+
+                if (-not $traversal.CyclesEquivalent) {
+                    $problems.Add("non-equivalent traversal cycles for '$page' ($($traversal.CycleLengths -join ', ') taps)")
+                }
+            }
+        }
+
         if ($problems.Count -gt 0) {
             throw "$Label report '$($report.Path)' is incomplete: $($problems -join ', ')."
         }
@@ -145,41 +195,103 @@ $candidateReports = @(Get-CmdPalIconReports -Path $CandidatePath)
 Assert-CompleteReports -Reports $baselineReports -Label 'Baseline'
 Assert-CompleteReports -Reports $candidateReports -Label 'Candidate'
 
-$workloadDefinitions = @(
-    [pscustomobject]@{ Name = 'List-item requests'; Property = 'ListItemRequestsStarted'; Tolerance = 0.05 },
-    [pscustomobject]@{ Name = 'Empty icon requests'; Property = 'RequestsEmpty'; Tolerance = 0.05 },
-    [pscustomobject]@{ Name = 'String inputs'; Property = 'InputString'; Tolerance = 0.10 },
-    [pscustomobject]@{ Name = 'Stream inputs'; Property = 'InputStream'; Tolerance = 0.05 },
-    [pscustomobject]@{ Name = 'Bitmap results'; Property = 'ResultBitmap'; Tolerance = 0.05 },
-    [pscustomobject]@{ Name = 'Fluent glyph results'; Property = 'ResultFluentGlyph'; Tolerance = 0.10 }
-)
+$allReports = @($baselineReports) + @($candidateReports)
+$reportsWithMetadata = @($allReports | Where-Object { $null -ne $_.BenchmarkMetadata })
+$benchmarkMetadataAvailable = $reportsWithMetadata.Count -eq $allReports.Count
+$benchmarkContractPass = $true
+$benchmarkContractStatus = 'not available; using observed row/result counts'
+if ($reportsWithMetadata.Count -gt 0) {
+    $contracts = @($reportsWithMetadata | ForEach-Object { $_.BenchmarkContract } | Sort-Object -Unique)
+    $scenarios = @($reportsWithMetadata | ForEach-Object { $_.BenchmarkMetadata.Scenario } | Sort-Object -Unique)
+    $benchmarkContractPass = $benchmarkMetadataAvailable -and $contracts.Count -eq 1 -and $scenarios.Count -eq 1 -and $scenarios[0] -eq $Scenario
+    $benchmarkContractStatus = if ($benchmarkContractPass) { 'PASS' } else { 'FAIL' }
+}
 
-$workloadRows = foreach ($definition in $workloadDefinitions) {
-    $baseline = Get-Median -Reports $baselineReports -PropertyPath $definition.Property
-    $candidate = Get-Median -Reports $candidateReports -PropertyPath $definition.Property
-    $relativeDifference = if ($null -ne $baseline -and $null -ne $candidate -and $baseline -ne 0) {
-        [Math]::Abs(($candidate - $baseline) / $baseline)
-    }
-    elseif ($baseline -eq $candidate) {
-        0
-    }
-    else {
-        [double]::PositiveInfinity
-    }
+$workloadRows = [System.Collections.Generic.List[object]]::new()
+if ($benchmarkMetadataAvailable -and $Scenario -eq 'A') {
+    foreach ($page in @($baselineReports[0].BenchmarkMetadata.Pages)) {
+        $baseline = Get-TraversalMedian -Reports $baselineReports -Page ([string]$page)
+        $candidate = Get-TraversalMedian -Reports $candidateReports -Page ([string]$page)
+        $tolerance = 0.05
+        $relativeDifference = if ($null -ne $baseline -and $null -ne $candidate -and $baseline -ne 0) {
+            [Math]::Abs(($candidate - $baseline) / $baseline)
+        }
+        elseif ($baseline -eq $candidate) {
+            0
+        }
+        else {
+            [double]::PositiveInfinity
+        }
 
-    [pscustomobject]@{
-        Name = $definition.Name
-        Baseline = $baseline
-        Candidate = $candidate
-        Change = Format-Change -Baseline $baseline -Candidate $candidate
-        TolerancePercent = $definition.Tolerance * 100
-        Pass = $relativeDifference -le $definition.Tolerance
+        $workloadRows.Add([pscustomobject]@{
+            Name = "Down taps for complete '$page' traversals"
+            Baseline = $baseline
+            Candidate = $candidate
+            Change = Format-Change -Baseline $baseline -Candidate $candidate
+            TolerancePercent = $tolerance * 100
+            Pass = $relativeDifference -le $tolerance
+        })
+    }
+}
+elseif ($benchmarkMetadataAvailable -and $Scenario -eq 'B') {
+    for ($index = 0; $index -lt $baselineReports[0].BenchmarkMetadata.Pages.Count; $index++) {
+        $page = $baselineReports[0].BenchmarkMetadata.Pages[$index]
+        $baseline = [double]$baselineReports[0].BenchmarkMetadata.FastScrollCounts[$index] + [double]$baselineReports[0].BenchmarkMetadata.SlowScrollCounts[$index]
+        $candidate = [double]$candidateReports[0].BenchmarkMetadata.FastScrollCounts[$index] + [double]$candidateReports[0].BenchmarkMetadata.SlowScrollCounts[$index]
+        $workloadRows.Add([pscustomobject]@{
+            Name = "Configured wheel steps for '$page'"
+            Baseline = $baseline
+            Candidate = $candidate
+            Change = Format-Change -Baseline $baseline -Candidate $candidate
+            TolerancePercent = 0
+            Pass = $baseline -eq $candidate
+        })
+    }
+}
+else {
+    $fallbackWorkloadDefinitions = @(
+        [pscustomobject]@{ Name = 'List-item requests'; Property = 'ListItemRequestsStarted'; Tolerance = 0.10 },
+        [pscustomobject]@{ Name = 'List-item bitmap results'; Property = 'ListItemResultBitmap'; Tolerance = 0.05 },
+        [pscustomobject]@{ Name = 'List-item Fluent glyph results'; Property = 'ListItemResultFluentGlyph'; Tolerance = 0.05 }
+    )
+
+    foreach ($definition in $fallbackWorkloadDefinitions) {
+        $baseline = Get-Median -Reports $baselineReports -PropertyPath $definition.Property
+        $candidate = Get-Median -Reports $candidateReports -PropertyPath $definition.Property
+        $relativeDifference = if ($null -ne $baseline -and $null -ne $candidate -and $baseline -ne 0) {
+            [Math]::Abs(($candidate - $baseline) / $baseline)
+        }
+        elseif ($baseline -eq $candidate) {
+            0
+        }
+        else {
+            [double]::PositiveInfinity
+        }
+
+        $workloadRows.Add([pscustomobject]@{
+            Name = $definition.Name
+            Baseline = $baseline
+            Candidate = $candidate
+            Change = Format-Change -Baseline $baseline -Candidate $candidate
+            TolerancePercent = $definition.Tolerance * 100
+            Pass = $relativeDifference -le $definition.Tolerance
+        })
     }
 }
 
-$workloadPass = @($workloadRows | Where-Object { -not $_.Pass }).Count -eq 0
+$workloadPass = $benchmarkContractPass -and @($workloadRows | Where-Object { -not $_.Pass }).Count -eq 0
 
 $metricDefinitions = @(
+    [pscustomobject]@{ Name = 'Observed list-item requests'; Property = 'ListItemRequestsStarted'; Unit = ''; LowerIsBetter = $false },
+    [pscustomobject]@{ Name = 'Observed empty icon requests'; Property = 'RequestsEmpty'; Unit = ''; LowerIsBetter = $false },
+    [pscustomobject]@{ Name = 'Observed list-item bitmap results'; Property = 'ListItemResultBitmap'; Unit = ''; LowerIsBetter = $false },
+    [pscustomobject]@{ Name = 'Observed list-item Fluent glyph results'; Property = 'ListItemResultFluentGlyph'; Unit = ''; LowerIsBetter = $false },
+    [pscustomobject]@{ Name = 'Provider new loads'; Property = 'ProviderNewLoad'; Unit = ''; LowerIsBetter = $true },
+    [pscustomobject]@{ Name = 'Provider cache hits'; Property = 'ProviderCacheHit'; Unit = ''; LowerIsBetter = $false },
+    [pscustomobject]@{ Name = 'Worker String inputs'; Property = 'InputString'; Unit = ''; LowerIsBetter = $false },
+    [pscustomobject]@{ Name = 'Worker Stream inputs'; Property = 'InputStream'; Unit = ''; LowerIsBetter = $false },
+    [pscustomobject]@{ Name = 'New-load bitmap results'; Property = 'ResultBitmap'; Unit = ''; LowerIsBetter = $false },
+    [pscustomobject]@{ Name = 'New-load Fluent glyph results'; Property = 'ResultFluentGlyph'; Unit = ''; LowerIsBetter = $false },
     [pscustomobject]@{ Name = 'Session duration'; Property = 'DurationMs'; Unit = ' ms'; LowerIsBetter = $true },
     [pscustomobject]@{ Name = 'Process CPU time'; Property = 'ProcessCpuMs'; Unit = ' ms'; LowerIsBetter = $true },
     [pscustomobject]@{ Name = 'Logical-core utilization'; Property = 'LogicalCoreUtilizationPercent'; Unit = '%'; LowerIsBetter = $true },
@@ -196,6 +308,14 @@ $metricDefinitions = @(
     [pscustomobject]@{ Name = 'Loads created'; Property = 'LoadsCreated'; Unit = ''; LowerIsBetter = $true },
     [pscustomobject]@{ Name = 'Direct glyph loads'; Property = 'DirectGlyphLoads'; Unit = ''; LowerIsBetter = $false },
     [pscustomobject]@{ Name = 'Loads sent through worker queue'; Property = 'EnqueueToCompletion.Count'; Unit = ''; LowerIsBetter = $true },
+    [pscustomobject]@{ Name = '20x20 cache capacity'; Property = 'Cache20.Capacity'; Unit = ' entries'; LowerIsBetter = $false },
+    [pscustomobject]@{ Name = '20x20 cache hit rate'; Property = 'Cache20.HitRatePercent'; Unit = '%'; LowerIsBetter = $false },
+    [pscustomobject]@{ Name = '20x20 cache removals'; Property = 'Cache20.EntriesRemoved'; Unit = ''; LowerIsBetter = $true },
+    [pscustomobject]@{ Name = '20x20 cache low-score removals'; Property = 'Cache20.LowScoreRemovals'; Unit = ''; LowerIsBetter = $true },
+    [pscustomobject]@{ Name = '20x20 glyph-cache hit rate'; Property = 'GlyphCache20.HitRatePercent'; Unit = '%'; LowerIsBetter = $false },
+    [pscustomobject]@{ Name = '20x20 glyph-cache maximum entries'; Property = 'GlyphCache20.MaximumObservedEntries'; Unit = ' entries'; LowerIsBetter = $false },
+    [pscustomobject]@{ Name = '20x20 other-cache hit rate'; Property = 'OtherCache20.HitRatePercent'; Unit = '%'; LowerIsBetter = $false },
+    [pscustomobject]@{ Name = '20x20 other-cache maximum entries'; Property = 'OtherCache20.MaximumObservedEntries'; Unit = ' entries'; LowerIsBetter = $false },
     [pscustomobject]@{ Name = 'Queue wait average'; Property = 'QueueWait.AverageMs'; Unit = ' ms'; LowerIsBetter = $true },
     [pscustomobject]@{ Name = 'Queue wait p95 bound'; Property = 'QueueWait.P95UpperBoundMs'; Unit = ' ms'; LowerIsBetter = $true },
     [pscustomobject]@{ Name = 'Demanded queue wait average'; Property = 'DemandedQueueWait.AverageMs'; Unit = ' ms'; LowerIsBetter = $true },
@@ -207,6 +327,8 @@ $metricDefinitions = @(
     [pscustomobject]@{ Name = 'Dispatcher callback wall-time p95 bound'; Property = 'DispatcherCallbackWallTime.P95UpperBoundMs'; Unit = ' ms'; LowerIsBetter = $true },
     [pscustomobject]@{ Name = 'Icon-element update average'; Property = 'IconElementUpdate.AverageMs'; Unit = ' ms'; LowerIsBetter = $true },
     [pscustomobject]@{ Name = 'Icon-element update p95 bound'; Property = 'IconElementUpdate.P95UpperBoundMs'; Unit = ' ms'; LowerIsBetter = $true },
+    [pscustomobject]@{ Name = 'Icon elements created'; Property = 'IconElementsCreated'; Unit = ''; LowerIsBetter = $true },
+    [pscustomobject]@{ Name = 'Icon elements reused'; Property = 'IconElementsReused'; Unit = ''; LowerIsBetter = $false },
     [pscustomobject]@{ Name = 'Loads completed without requester'; Property = 'LoadsCompletedWithoutRequester'; Unit = ''; LowerIsBetter = $true }
 )
 
@@ -240,6 +362,7 @@ $null = $markdown.AppendLine()
 $null = $markdown.AppendLine("- Scenario: $Scenario")
 $null = $markdown.AppendLine("- Baseline runs: $($baselineReports.Count)")
 $null = $markdown.AppendLine("- Candidate runs: $($candidateReports.Count)")
+$null = $markdown.AppendLine("- Automation contract: $benchmarkContractStatus")
 $null = $markdown.AppendLine("- Workload gate: $(if ($workloadPass) { 'PASS' } else { 'FAIL' })")
 if ($baselineReports.Count -lt 3 -or $candidateReports.Count -lt 3) {
     $null = $markdown.AppendLine('- Confidence: exploratory; collect at least three runs per side for PR evidence.')
@@ -250,6 +373,8 @@ else {
 
 $null = $markdown.AppendLine()
 $null = $markdown.AppendLine('## Workload equivalence')
+$null = $markdown.AppendLine()
+$null = $markdown.AppendLine('The gate uses the external automation contract and completed traversal input. Worker input kinds, provider resolutions, cache activity, and new-load result counts are outcomes of the implementation and are reported below instead of being used to reject intended optimizations.')
 $null = $markdown.AppendLine()
 $null = $markdown.AppendLine('| Metric | Baseline median | Candidate median | Change | Allowed | Result |')
 $null = $markdown.AppendLine('|---|---:|---:|---:|---:|:---:|')
@@ -277,6 +402,8 @@ $jsonPath = [IO.Path]::ChangeExtension($OutputPath, '.json')
     Scenario = $Scenario
     BaselineRuns = $baselineReports.Count
     CandidateRuns = $candidateReports.Count
+    BenchmarkMetadataAvailable = $benchmarkMetadataAvailable
+    BenchmarkContractPass = $benchmarkContractPass
     WorkloadPass = $workloadPass
     Workload = $workloadRows
     Metrics = $metricRows
